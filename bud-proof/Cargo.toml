@@ -1,0 +1,8 @@
+[package]
+name = "bud-proof"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bud-vm = { path = "../bud-vm" }
+bud-isa = { path = "../bud-isa" }

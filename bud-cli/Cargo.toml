@@ -1,0 +1,12 @@
+[package]
+name = "bud-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bud-isa = { path = "../bud-isa" }
+bud-vm = { path = "../bud-vm" }
+bud-compiler = { path = "../bud-compiler" }
+bud-proof = { path = "../bud-proof" }
+bud-state = { path = "../bud-state" }
+clap = { version = "4.0", features = ["derive"] }

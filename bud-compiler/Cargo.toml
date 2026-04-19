@@ -1,0 +1,8 @@
+[package]
+name = "bud-compiler"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bud-isa = { path = "../bud-isa" }
+logos = "0.14"

@@ -1,0 +1,6 @@
+contract MerkleTest {
+    pub fn verify(root: u64, leaf: u64, path: u64) {
+        let valid = verify_merkle_proof(root, leaf, path);
+        emit ProofResult(valid);
+    }
+}
