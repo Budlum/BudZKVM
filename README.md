@@ -1,6 +1,6 @@
-# BudZKVM: ZKP-Native Layer 1 Execution Environment
+# BudZKVM: A Production-Grade ZKP-Native Virtual Machine
 
-BudZKVM is a high-performance, verifiable blockchain execution engine. It features a custom programming language (BudL), a trace-generating virtual machine (BudVM), and a STARK-based proving system designed for infinite scalability via recursive proof aggregation.
+BudZKVM is a high-performance, verifiable virtual machine and cryptographic proving engine. It features a custom programming language (BudL), a trace-generating virtual machine (BudVM), and a production-grade STARK-based proving system using the Winterfell engine.
 
 ## 🚀 Quick Start
 
@@ -12,48 +12,51 @@ BudZKVM is a high-performance, verifiable blockchain execution engine. It featur
 nix develop
 ```
 
-### Run a Contract
+### Deploy a Contract
 ```bash
-cargo run -p bud-cli -- run --program example.bud --args 4919 --args 0 --args 0
+cargo run -p bud-cli -- deploy --program example.bud
 ```
 
-### Run a Batch (Block Simulation)
+### Call a Contract (with Proof Generation & Verification)
 ```bash
-cargo run -p bud-cli -- batch --programs example.bud --programs example2.bud
+cargo run -p bud-cli -- call --bytecode example.bud.budc --sender 1 --args 10 --args 20
 ```
 
-## 🏗 Architecture
+### Direct Run & Verify
+```bash
+cargo run -p bud-cli -- run --program example.bud --sender 1
+```
 
-- **BudL (.bud)**: A domain-specific language for ZK-smart contracts.
-- **BudVM**: A 64-bit register-based VM that generates algebraic execution traces.
-- **Bud-ISA**: A deterministic instruction set optimized for proving.
-- **Prover**: STARK engine converting traces into cryptographic proofs.
-- **Recursive Aggregation**: Combining transaction proofs into a single block proof.
+## 🏗 Technical Architecture
+
+- **BudL (.bud)**: A domain-specific language for ZK-computations.
+- **BudVM**: A 64-bit, 32-register VM generating high-fidelity execution traces.
+- **Bud-ISA**: A deterministic instruction set with 31+ opcodes.
+- **STARK Engine**: 
+    - **Winterfell Integration**: Powered by the industry-standard Winterfell 0.7 prover.
+    - **55-Column AIR**: Comprehensive Algebraic Intermediate Representation covering arithmetic (ADD, SUB, MUL), comparisons (EQ, LT, GT, etc.), storage, and hashing.
+    - **Combined Constraints**: Optimized degree-2 transition constraints using opcode selectors.
+- **Persistence**: File-based state management with account nonce tracking and state-root calculation.
 
 ## 🗺 Roadmap
 
-### 🏁 Milestone 1: Core Foundation (Current)
-- [x] BudL Compiler (Lexer, Parser, Codegen)
-- [x] BudVM Execution Engine with Trace Generation
-- [x] Basic STARK Proof Skeleton & Recursive Aggregation
-- [x] Storage Mappings & Merkle Verification Intrinsics
+### 🏁 Milestone 1: Core Foundation (COMPLETED)
+- [x] BudL Compiler (Lexer, Parser, Sema, Codegen)
+- [x] BudVM Execution Engine with 32-register state tracking
+- [x] Full STARK AIR (55-column trace) with all arithmetic/comparison constraints
+- [x] Automated Proof Generation & Verification Pipeline
+- [x] Persistent State Storage (`state.json`)
 
-### 🛠 Milestone 2: Language & VM Enhancement (Q2 2026)
-- [ ] **Advanced Types**: Support for `struct`, `enum`, and fixed-point math.
-- [ ] **Loops & Recursion**: Implementing bounded loops and tail-call optimization in VM.
-- [ ] **Standard Library**: Native modules for EdDSA, SHA3, and JSON parsing.
-- [ ] **Gas Metering**: Adding deterministic resource tracking for DoS protection.
+### 🛠 Milestone 2: VM & Language Hardening
+- [ ] **Gas Metering**: Deterministic cycle counting for DoS protection.
+- [ ] **Loops & Recursion**: Bounded loops and tail-recursive call support.
+- [ ] **Standard Library**: Native field-friendly Poseidon and Merkle modules.
+- [ ] **Advanced Types**: Structs and custom mappings in BudL.
 
-### 🌐 Milestone 3: Networking & Consensus (Q3 2026)
-- [ ] **P2P Layer**: Implementation of libp2p-based gossip protocol.
-- [ ] **Consensus Integration**: Plugging BudVM into CometBFT (Tendermint) for BFT finality.
-- [ ] **State Sync**: Snapshot-based fast sync using recursive proof verification.
-
-### 💎 Milestone 4: Ecosystem & Mainnet (Q4 2026)
-- [ ] **BudExplorer**: A block explorer visualizing execution traces and STARK proofs.
-- [ ] **Web3 Bridge**: EVM-compatible bridge for cross-chain liquidity.
-- [ ] **Developer SDK**: VSCode extension for BudL (LSP) and testing framework.
-- [ ] **Mainnet Genesis**: Launching the BudZKVM sovereign network.
+### 🌐 Milestone 3: Expansion & Integration
+- [ ] **Recursive Proof Aggregation**: Real recursive STARK verification in AIR.
+- [ ] **WASM Verifier**: Compiling the verifier to WASM for browser-side verification.
+- [ ] **JSON-RPC Interface**: External API for zkVM interaction.
 
 ## 📜 License
 Apache-2.0
