@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 bud-vm = { path = "../bud-vm" }
 bud-isa = { path = "../bud-isa" }
+winterfell = "0.7"
+winter-math = "0.7"
+winter-crypto = "0.7"
+serde = { version = "1.0", features = ["derive"] }

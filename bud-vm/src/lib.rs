@@ -13,6 +13,7 @@ pub struct Vm {
 
 pub struct Context {
     pub sender: u64,
+    pub nonce: u64,
     pub block_height: u64,
 }
 
@@ -31,7 +32,7 @@ impl Vm {
             memory: vec![0; memory_size],
             storage: std::collections::HashMap::new(),
             events: Vec::new(),
-            context: Context { sender: 0, block_height: 0 },
+            context: Context { sender: 0, nonce: 0, block_height: 0 },
             trace: Vec::new(),
             halted: false,
         }
@@ -156,6 +157,7 @@ impl Vm {
                 match inst.imm {
                     1 => self.registers[inst.rd as usize] = self.context.sender,
                     2 => self.registers[inst.rd as usize] = self.context.block_height,
+                    3 => self.registers[inst.rd as usize] = self.context.nonce,
                     _ => {}
                 }
                 self.pc += 1;

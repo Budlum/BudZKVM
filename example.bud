@@ -1,6 +1,16 @@
-contract MerkleTest {
-    pub fn verify(root: u64, leaf: u64, path: u64) {
-        let valid = verify_merkle_proof(root, leaf, path);
-        emit ProofResult(valid);
+contract FullOpcodeTest {
+    pub fn main() {
+        let a = 100;
+        let b = 37;
+        let sum = a + b;
+        let diff = a - b;
+        let prod = a * b;
+        let is_eq = a == b;
+        let is_gt = a > b;
+        emit Sum(sum);
+        emit Diff(diff);
+        emit Prod(prod);
+        emit IsEq(is_eq);
+        emit IsGt(is_gt);
     }
 }

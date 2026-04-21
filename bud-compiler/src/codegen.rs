@@ -166,6 +166,10 @@ impl Codegen {
                     let res = self.alloc_reg();
                     self.emit(Opcode::Syscall, res, 0, 0, 1);
                     res
+                } else if name == "msg::nonce" {
+                    let res = self.alloc_reg();
+                    self.emit(Opcode::Syscall, res, 0, 0, 3);
+                    res
                 } else if name == "block::number" {
                     let res = self.alloc_reg();
                     self.emit(Opcode::Syscall, res, 0, 0, 2);
