@@ -66,6 +66,11 @@ impl Codegen {
                 
                 self.emit(Opcode::SWrite, 0, val_reg, target_slot_reg, -1); 
             }
+            Stmt::Assign(name, expr) => {
+                let reg = self.generate_expr(expr, scope, storage);
+                let target_reg = *scope.get(name).expect("Undefined variable");
+                self.emit(Opcode::Add, target_reg, reg, 0, 0); 
+            }
             Stmt::If(cond, then_branch, else_branch) => {
                 let cond_reg = self.generate_expr(cond, scope, storage);
                 let jump_to_then_idx = self.instructions.len();
@@ -83,6 +88,33 @@ impl Codegen {
                 
                 self.patch_jump(jump_to_then_idx, (then_start_idx as i32) - (jump_to_then_idx as i32));
                 self.patch_jump(jump_to_end_idx, (end_idx as i32) - (jump_to_end_idx as i32));
+            }
+            Stmt::While(cond, body) => {
+                let start_idx = self.instructions.len();
+                let cond_reg = self.generate_expr(cond, scope, storage);
+                
+                let jump_to_body_idx = self.instructions.len();
+                self.emit(Opcode::Jnz, 0, cond_reg, 0, 0);
+                
+                let jump_to_end_idx = self.instructions.len();
+                self.emit(Opcode::Jmp, 0, 0, 0, 0);
+                
+                let body_start_idx = self.instructions.len();
+                for s in body { self.generate_stmt(s, scope, storage, contract); }
+                
+                let current_idx = self.instructions.len();
+                self.emit(Opcode::Jmp, 0, 0, 0, (start_idx as i32) - (current_idx as i32));
+                
+                let end_idx = self.instructions.len();
+                self.patch_jump(jump_to_body_idx, (body_start_idx as i32) - (jump_to_body_idx as i32));
+                self.patch_jump(jump_to_end_idx, (end_idx as i32) - (jump_to_end_idx as i32));
+            }
+            Stmt::Return(expr) => {
+                if let Some(e) = expr {
+                    let reg = self.generate_expr(e, scope, storage);
+                    self.emit(Opcode::Load, 1, reg, 0, 0); 
+                }
+                self.emit(Opcode::Halt, 0, 0, 0, 0);
             }
             Stmt::Emit(_name, args) => {
                 if !args.is_empty() {

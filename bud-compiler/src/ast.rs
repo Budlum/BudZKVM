@@ -2,6 +2,7 @@
 pub struct Contract {
     pub name: String,
     pub storage: Vec<StorageField>,
+    pub structs: Vec<Struct>,
     pub functions: Vec<Function>,
 }
 
@@ -33,8 +34,16 @@ pub enum Stmt {
     StorageWrite(String, Expr),
     MappingWrite(String, Expr, Expr),
     If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
+    While(Expr, Vec<Stmt>),
+    Return(Option<Expr>),
     Emit(String, Vec<Expr>),
     Expr(Expr),
+}
+
+#[derive(Debug, Clone)]
+pub struct Struct {
+    pub name: String,
+    pub fields: Vec<StorageField>,
 }
 
 #[derive(Debug, Clone)]

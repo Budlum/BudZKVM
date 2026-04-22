@@ -22,6 +22,14 @@ pub enum Token {
     Constrain,
     #[token("pub")]
     Pub,
+    #[token("while")]
+    While,
+    #[token("for")]
+    For,
+    #[token("return")]
+    Return,
+    #[token("struct")]
+    Struct,
 
     #[token("{")]
     BraceOpen,

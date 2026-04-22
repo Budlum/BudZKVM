@@ -61,6 +61,17 @@ impl SemanticAnalyzer {
                         self.analyze_expr(arg, &local_symbols);
                     }
                 }
+                Stmt::While(cond, body) => {
+                    self.analyze_expr(cond, &local_symbols);
+                    for s in body {
+                        self.analyze_stmt_recursive(s, &mut local_symbols);
+                    }
+                }
+                Stmt::Return(expr) => {
+                    if let Some(e) = expr {
+                        self.analyze_expr(e, &local_symbols);
+                    }
+                }
                 Stmt::Expr(expr) => {
                     self.analyze_expr(expr, &local_symbols);
                 }
@@ -73,6 +84,28 @@ impl SemanticAnalyzer {
             Stmt::Let(name, expr) => {
                 self.analyze_expr(expr, symbols);
                 symbols.insert(name.clone());
+            }
+            Stmt::While(cond, body) => {
+                self.analyze_expr(cond, symbols);
+                for s in body {
+                    self.analyze_stmt_recursive(s, symbols);
+                }
+            }
+            Stmt::If(cond, then_branch, else_branch) => {
+                self.analyze_expr(cond, symbols);
+                for s in then_branch {
+                    self.analyze_stmt_recursive(s, symbols);
+                }
+                if let Some(eb) = else_branch {
+                    for s in eb {
+                        self.analyze_stmt_recursive(s, symbols);
+                    }
+                }
+            }
+            Stmt::Return(expr) => {
+                if let Some(e) = expr {
+                    self.analyze_expr(e, symbols);
+                }
             }
             _ => {}
         }

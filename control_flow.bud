@@ -1,0 +1,17 @@
+contract LoopTest {
+    pub fn main() {
+        let count = 0;
+        let sum = 0;
+        
+        while (count < 5) {
+            sum = sum + count;
+            count = count + 1;
+        }
+        
+        if (sum == 10) {
+            emit Success(1);
+        } else {
+            emit Failure(0);
+        }
+    }
+}

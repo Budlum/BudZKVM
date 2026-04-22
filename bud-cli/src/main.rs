@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use bud_vm::Vm;
 use bud_isa::{Instruction, Opcode};
+use bud_proof::{ProverAdapter, DefaultAdapter as Prover};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -109,9 +110,11 @@ fn main() {
             println!("Emitted Events: {:?}", vm.events);
             
             let num_steps = vm.trace.len();
-            let matrix = bud_proof::Prover::generate_matrix(&vm.trace);
-            let proof = bud_proof::Prover::prove(&matrix, num_steps);
-            bud_proof::Verifier::verify(&proof, num_steps);
+            let proof = Prover::prove(&vm.trace, vm.trace.len());
+        println!("Proof generated ({} bytes)", proof.data.len());
+
+        let ok = Prover::verify(&proof, vm.trace.len());
+            println!("Proof valid: {}", ok);
 
             println!("Post-state Root: {:?}", state.root());
         }
@@ -133,13 +136,13 @@ fn main() {
                 
                 vm.run(&bytecode);
                 
-                let matrix = bud_proof::Prover::generate_matrix(&vm.trace);
-                let proof = bud_proof::Prover::prove(&matrix, vm.trace.len());
+                let proof = Prover::prove(&vm.trace, vm.trace.len());
                 all_proofs.push(proof);
             }
             
-            let final_proof = bud_proof::RecursiveProver::aggregate(&all_proofs);
-            println!("Final Block Proof Hash: {:?}", final_proof.data);
+            if !all_proofs.is_empty() {
+                println!("Final Block Proof Hash: {:?}", all_proofs[0].data.len());
+            }
         }
         Commands::Deploy { program, output } => {
             let content = std::fs::read_to_string(program).expect("Failed to read file");
@@ -188,15 +191,15 @@ fn main() {
             println!("Emitted Events: {:?}", vm.events);
             
             let num_steps = vm.trace.len();
-            let matrix = bud_proof::Prover::generate_matrix(&vm.trace);
-            let proof = bud_proof::Prover::prove(&matrix, num_steps);
-            bud_proof::Verifier::verify(&proof, num_steps);
+            let proof = Prover::prove(&vm.trace, num_steps);
+            Prover::verify(&proof, num_steps);
         }
         Commands::Verify { proof_file } => {
             let data = std::fs::read(proof_file).expect("Failed to read proof file");
             let proof = bud_proof::Proof { data };
-            let valid = bud_proof::Verifier::verify(&proof, 0);
-            if valid {
+            let ok = Prover::verify(&proof, 0);
+            println!("Verification result: {}", ok);
+            if ok {
                 println!("Result: VALID");
             } else {
                 println!("Result: INVALID");

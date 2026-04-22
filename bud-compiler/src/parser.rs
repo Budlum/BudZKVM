@@ -51,6 +51,7 @@ impl<'a> Parser<'a> {
         
         let mut functions = Vec::new();
         let mut storage = Vec::new();
+        let mut structs = Vec::new();
 
         while self.peek() != &Token::BraceClose {
             match self.peek() {
@@ -75,6 +76,21 @@ impl<'a> Parser<'a> {
                     }
                     self.expect(Token::BraceClose);
                 }
+                Token::Struct => {
+                    self.consume();
+                    let name = if let Token::Ident(name) = self.consume() { name } else { panic!("Expected name") };
+                    self.expect(Token::BraceOpen);
+                    let mut fields = Vec::new();
+                    while self.peek() != &Token::BraceClose {
+                        let fname = if let Token::Ident(n) = self.consume() { n } else { panic!("Expected name") };
+                        self.expect(Token::Colon);
+                        let fty = if let Token::Ident(t) = self.consume() { t } else { panic!("Expected type") };
+                        self.expect(Token::Comma);
+                        fields.push(StorageField { name: fname, ty: fty });
+                    }
+                    self.expect(Token::BraceClose);
+                    structs.push(Struct { name, fields });
+                }
                 _ => {
                     functions.push(self.parse_function());
                 }
@@ -85,6 +101,7 @@ impl<'a> Parser<'a> {
         Contract {
             name,
             storage,
+            structs,
             functions,
         }
     }
@@ -186,6 +203,29 @@ impl<'a> Parser<'a> {
                     else_branch = Some(eb);
                 }
                 Stmt::If(cond, then_branch, else_branch)
+            }
+            Token::While => {
+                self.consume();
+                self.expect(Token::ParenOpen);
+                let cond = self.parse_expr();
+                self.expect(Token::ParenClose);
+                self.expect(Token::BraceOpen);
+                let mut body = Vec::new();
+                while self.peek() != &Token::BraceClose {
+                    body.push(self.parse_stmt());
+                }
+                self.expect(Token::BraceClose);
+                Stmt::While(cond, body)
+            }
+            Token::Return => {
+                self.consume();
+                let expr = if self.peek() != &Token::Semicolon {
+                    Some(self.parse_expr())
+                } else {
+                    None
+                };
+                self.expect(Token::Semicolon);
+                Stmt::Return(expr)
             }
             Token::Ident(name) if name == "emit" => {
                 self.consume();
