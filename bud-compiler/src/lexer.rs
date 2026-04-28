@@ -26,6 +26,8 @@ pub enum Token {
     While,
     #[token("for")]
     For,
+    #[token("in")]
+    In,
     #[token("return")]
     Return,
     #[token("struct")]
@@ -53,6 +55,8 @@ pub enum Token {
     Arrow,
     #[token("=>")]
     FatArrow,
+    #[token("..")]
+    DotDot,
 
     #[token("+")]
     Plus,

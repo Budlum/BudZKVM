@@ -35,6 +35,12 @@ pub enum Stmt {
     MappingWrite(String, Expr, Expr),
     If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
     While(Expr, Vec<Stmt>),
+    For {
+        var: String,
+        start: Expr,
+        end: Expr,
+        body: Vec<Stmt>,
+    },
     Return(Option<Expr>),
     Emit(String, Vec<Expr>),
     Expr(Expr),

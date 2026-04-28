@@ -1,0 +1,23 @@
+contract LoopExamples {
+    pub fn main() {
+        let for_sum = 0;
+        for i in 0..5 {
+            for_sum = for_sum + i;
+        }
+
+        let count = 0;
+        let while_sum = 0;
+        while (count < 4) {
+            while_sum = while_sum + count;
+            count = count + 1;
+        }
+
+        if (for_sum == 10) {
+            emit ForLoopOk(for_sum);
+        }
+
+        if (while_sum == 6) {
+            emit WhileLoopOk(while_sum);
+        }
+    }
+}

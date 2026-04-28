@@ -30,19 +30,44 @@ pub struct Instruction {
 
 VM'imizin yapabildiği temel işlemlerin listesi `bud-isa/src/lib.rs` içinde tanımlıdır:
 
-* **ALU (Aritmetik/Mantık):** `Add`, `Sub`, `Mul`
-* **Karşılaştırma:** `Eq` (Eşit mi?), `Lt` (Küçük mü?)
-* **Kontrol Akışı (Control Flow):** `Jmp` (Koşulsuz atla), `Jnz` (Sıfır değilse atla), `Halt` (Programı bitir)
-* **Veri Taşıma:** `Load` (Immediate değeri register'a yükle)
-* **Özel ZK Kodları:** `Assert` (Durumu kanıtla), `Log` (Kanıt dışı konsola yaz)
+* **ALU (Aritmetik/Mantık):** `Add`, `Sub`, `Mul`, `Div`, `Inv`, `And`, `Or`, `Xor`, `Not`
+* **Karşılaştırma:** `Eq`, `Neq`, `Lt`, `Gt`, `Lte`, `Gte`
+* **Kontrol Akışı (Control Flow):** `Jmp` (koşulsuz atla), `Jnz` (sıfır değilse atla), `Call`, `Ret`, `Halt`
+* **Veri Taşıma:** `Load`, `Store`, `Push`, `Pop`
+* **Storage ve Sistem:** `SRead`, `SWrite`, `Syscall`
+* **Özel ZK Kodları:** `Assert`, `Poseidon`, `VerifyMerkle`, `Log`
 
 Her opcode'un arkasında bir sayısal karşılık (discriminant) vardır. Örneğin `Add` işlemi `0x01`'dir. ZK Prover (Kanıtlayıcı) bu sayıları baz alarak hangi polinom kısıtlamasının (constraint) aktifleşeceğine karar verir.
+
+### Stack Destekli Kontrol Akışı
+
+Mimari hâlâ register tabanlıdır; fakat fonksiyon benzeri kontrol akışı için küçük bir VM stack'i bulunur.
+
+* `Call`: `pc + 1` dönüş adresini stack'e koyar ve `pc + imm` hedef adresine atlar.
+* `Ret`: Stack'ten dönüş adresini alır ve `pc` değerini ona set eder.
+* `Push`: Bir register değerini stack'e koyar.
+* `Pop`: Stack'ten değer alıp hedef register'a yazar.
+
+Bu ayrım önemlidir: hesaplama modeli register tabanlı kalır, stack sadece çağrı ve geçici değer taşıma için kullanılır. Bu sayede bytecode daha ergonomik olurken execution trace hâlâ register access tablosuna doğal biçimde dökülür.
 
 ### 2. Immediate (Sabit) Değerler
 
 Bir register'a "10" sayısını koymak isterseniz, `10` sayısı hafızada başka bir yerde mi durmalı, yoksa komutun içinde mi gelmeli? Komutun içine gömülen bu sabit sayılara **Immediate** denir.
 
 BudZKVM'de `Load R1, 10` komutu, `dst = 1`, `imm = 10`, `opcode = Load` anlamına gelir.
+
+## Bytecode Formatı ve L1 Entegrasyonu
+
+`Instruction::encode()` her instruction'ı tek bir `u64` olarak paketler. CLI ve L1 entegrasyonunda bu değerler little-endian byte dizisine çevrilir:
+
+```rust
+let bytes: Vec<u8> = bytecode
+    .iter()
+    .flat_map(|instruction| instruction.to_le_bytes())
+    .collect();
+```
+
+Budlum L1 `infra` reposundaki `TransactionType::ContractCall` bu formatı kullanır. `tx.data` alanı boş olamaz ve uzunluğu 8'in katı olmalıdır; her 8 byte bir BudZKVM instruction'ıdır.
 
 ## ZK-Friendly Encoding (ZK Dostu Kodlama)
 

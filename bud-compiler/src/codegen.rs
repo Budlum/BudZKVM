@@ -1,5 +1,5 @@
 use crate::ast::*;
-use bud_isa::{Opcode, Instruction};
+use bud_isa::{Instruction, Opcode};
 
 pub struct Codegen {
     instructions: Vec<u64>,
@@ -38,7 +38,13 @@ impl Codegen {
         }
     }
 
-    fn generate_stmt(&mut self, stmt: &Stmt, scope: &mut std::collections::HashMap<String, u8>, storage: &std::collections::HashMap<String, i32>, contract: &Contract) {
+    fn generate_stmt(
+        &mut self,
+        stmt: &Stmt,
+        scope: &mut std::collections::HashMap<String, u8>,
+        storage: &std::collections::HashMap<String, i32>,
+        contract: &Contract,
+    ) {
         match stmt {
             Stmt::Let(name, expr) => {
                 let reg = self.generate_expr(expr, scope, storage);
@@ -57,62 +63,127 @@ impl Codegen {
                 let base_slot = *storage.get(name).expect("Unknown mapping");
                 let key_reg = self.generate_expr(key, scope, storage);
                 let val_reg = self.generate_expr(val, scope, storage);
-                
+
                 let base_reg = self.alloc_reg();
                 self.emit(Opcode::Load, base_reg, 0, 0, base_slot);
-                
+
                 let target_slot_reg = self.alloc_reg();
                 self.emit(Opcode::Poseidon, target_slot_reg, base_reg, key_reg, 0);
-                
-                self.emit(Opcode::SWrite, 0, val_reg, target_slot_reg, -1); 
+
+                self.emit(Opcode::SWrite, 0, val_reg, target_slot_reg, -1);
             }
             Stmt::Assign(name, expr) => {
                 let reg = self.generate_expr(expr, scope, storage);
                 let target_reg = *scope.get(name).expect("Undefined variable");
-                self.emit(Opcode::Add, target_reg, reg, 0, 0); 
+                self.emit(Opcode::Add, target_reg, reg, 0, 0);
             }
             Stmt::If(cond, then_branch, else_branch) => {
                 let cond_reg = self.generate_expr(cond, scope, storage);
                 let jump_to_then_idx = self.instructions.len();
                 self.emit(Opcode::Jnz, 0, cond_reg, 0, 0);
-                
+
                 if let Some(eb) = else_branch {
-                    for s in eb { self.generate_stmt(s, scope, storage, contract); }
+                    for s in eb {
+                        self.generate_stmt(s, scope, storage, contract);
+                    }
                 }
                 let jump_to_end_idx = self.instructions.len();
                 self.emit(Opcode::Jmp, 0, 0, 0, 0);
-                
+
                 let then_start_idx = self.instructions.len();
-                for s in then_branch { self.generate_stmt(s, scope, storage, contract); }
+                for s in then_branch {
+                    self.generate_stmt(s, scope, storage, contract);
+                }
                 let end_idx = self.instructions.len();
-                
-                self.patch_jump(jump_to_then_idx, (then_start_idx as i32) - (jump_to_then_idx as i32));
+
+                self.patch_jump(
+                    jump_to_then_idx,
+                    (then_start_idx as i32) - (jump_to_then_idx as i32),
+                );
                 self.patch_jump(jump_to_end_idx, (end_idx as i32) - (jump_to_end_idx as i32));
             }
             Stmt::While(cond, body) => {
                 let start_idx = self.instructions.len();
                 let cond_reg = self.generate_expr(cond, scope, storage);
-                
+
                 let jump_to_body_idx = self.instructions.len();
                 self.emit(Opcode::Jnz, 0, cond_reg, 0, 0);
-                
+
                 let jump_to_end_idx = self.instructions.len();
                 self.emit(Opcode::Jmp, 0, 0, 0, 0);
-                
+
                 let body_start_idx = self.instructions.len();
-                for s in body { self.generate_stmt(s, scope, storage, contract); }
-                
+                for s in body {
+                    self.generate_stmt(s, scope, storage, contract);
+                }
+
                 let current_idx = self.instructions.len();
-                self.emit(Opcode::Jmp, 0, 0, 0, (start_idx as i32) - (current_idx as i32));
-                
+                self.emit(
+                    Opcode::Jmp,
+                    0,
+                    0,
+                    0,
+                    (start_idx as i32) - (current_idx as i32),
+                );
+
                 let end_idx = self.instructions.len();
-                self.patch_jump(jump_to_body_idx, (body_start_idx as i32) - (jump_to_body_idx as i32));
+                self.patch_jump(
+                    jump_to_body_idx,
+                    (body_start_idx as i32) - (jump_to_body_idx as i32),
+                );
+                self.patch_jump(jump_to_end_idx, (end_idx as i32) - (jump_to_end_idx as i32));
+            }
+            Stmt::For {
+                var,
+                start,
+                end,
+                body,
+            } => {
+                let start_reg = self.generate_expr(start, scope, storage);
+                let end_reg = self.generate_expr(end, scope, storage);
+                let loop_reg = self.alloc_reg();
+                self.emit(Opcode::Add, loop_reg, start_reg, 0, 0);
+                scope.insert(var.clone(), loop_reg);
+
+                let start_idx = self.instructions.len();
+                let cond_reg = self.alloc_reg();
+                self.emit(Opcode::Lt, cond_reg, loop_reg, end_reg, 0);
+
+                let jump_to_body_idx = self.instructions.len();
+                self.emit(Opcode::Jnz, 0, cond_reg, 0, 0);
+
+                let jump_to_end_idx = self.instructions.len();
+                self.emit(Opcode::Jmp, 0, 0, 0, 0);
+
+                let body_start_idx = self.instructions.len();
+                for s in body {
+                    self.generate_stmt(s, scope, storage, contract);
+                }
+
+                let one_reg = self.alloc_reg();
+                self.emit(Opcode::Load, one_reg, 0, 0, 1);
+                self.emit(Opcode::Add, loop_reg, loop_reg, one_reg, 0);
+
+                let current_idx = self.instructions.len();
+                self.emit(
+                    Opcode::Jmp,
+                    0,
+                    0,
+                    0,
+                    (start_idx as i32) - (current_idx as i32),
+                );
+
+                let end_idx = self.instructions.len();
+                self.patch_jump(
+                    jump_to_body_idx,
+                    (body_start_idx as i32) - (jump_to_body_idx as i32),
+                );
                 self.patch_jump(jump_to_end_idx, (end_idx as i32) - (jump_to_end_idx as i32));
             }
             Stmt::Return(expr) => {
                 if let Some(e) = expr {
                     let reg = self.generate_expr(e, scope, storage);
-                    self.emit(Opcode::Load, 1, reg, 0, 0); 
+                    self.emit(Opcode::Load, 1, reg, 0, 0);
                 }
                 self.emit(Opcode::Halt, 0, 0, 0, 0);
             }
@@ -125,7 +196,6 @@ impl Codegen {
             Stmt::Expr(expr) => {
                 self.generate_expr(expr, scope, storage);
             }
-            _ => {}
         }
     }
 
@@ -136,16 +206,19 @@ impl Codegen {
         self.instructions[idx] = inst.encode();
     }
 
-    fn generate_expr(&mut self, expr: &Expr, scope: &std::collections::HashMap<String, u8>, storage: &std::collections::HashMap<String, i32>) -> u8 {
+    fn generate_expr(
+        &mut self,
+        expr: &Expr,
+        scope: &std::collections::HashMap<String, u8>,
+        storage: &std::collections::HashMap<String, i32>,
+    ) -> u8 {
         match expr {
             Expr::Int(val) => {
                 let reg = self.alloc_reg();
                 self.emit(Opcode::Load, reg, 0, 0, *val as i32);
                 reg
             }
-            Expr::Ident(name) => {
-                *scope.get(name).expect("Undefined variable in codegen")
-            }
+            Expr::Ident(name) => *scope.get(name).expect("Undefined variable in codegen"),
             Expr::StorageRead(name) => {
                 let reg = self.alloc_reg();
                 let slot = *storage.get(name).expect("Unknown storage variable");
@@ -155,13 +228,13 @@ impl Codegen {
             Expr::MappingRead(name, key) => {
                 let base_slot = *storage.get(name).expect("Unknown mapping");
                 let key_reg = self.generate_expr(key, scope, storage);
-                
+
                 let base_reg = self.alloc_reg();
                 self.emit(Opcode::Load, base_reg, 0, 0, base_slot);
-                
+
                 let target_slot_reg = self.alloc_reg();
                 self.emit(Opcode::Poseidon, target_slot_reg, base_reg, key_reg, 0);
-                
+
                 let res_reg = self.alloc_reg();
                 self.emit(Opcode::SRead, res_reg, 0, target_slot_reg, -1);
                 res_reg
@@ -170,7 +243,7 @@ impl Codegen {
                 let l_reg = self.generate_expr(left, scope, storage);
                 let r_reg = self.generate_expr(right, scope, storage);
                 let res_reg = self.alloc_reg();
-                
+
                 let opcode = match op {
                     BinOp::Add => Opcode::Add,
                     BinOp::Sub => Opcode::Sub,
@@ -183,7 +256,7 @@ impl Codegen {
                     BinOp::Lte => Opcode::Lte,
                     BinOp::Gte => Opcode::Gte,
                 };
-                
+
                 self.emit(opcode, res_reg, l_reg, r_reg, 0);
                 res_reg
             }

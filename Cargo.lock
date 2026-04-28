@@ -125,6 +125,7 @@ name = "bud-compiler"
 version = "0.1.0"
 dependencies = [
  "bud-isa",
+ "bud-vm",
  "logos",
 ]
 

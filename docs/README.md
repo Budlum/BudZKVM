@@ -14,9 +14,13 @@ BudZKVM, modüler bir yaklaşımla tasarlanmıştır. Kitap boyunca aşağıdaki
 
 1. **`bud-isa` (Instruction Set Architecture):** VM'in anladığı donanım komutları ve bu komutların bytecode formatında nasıl kodlandığı.
 2. **`bud-vm` (Sanal Makine):** Bytecode'u adım adım çalıştıran (fetch-decode-execute), register ve memory durumunu güncelleyen çekirdek yapı.
-3. **`bud-compiler` (Derleyici):** Yüksek seviyeli (ya da assembly benzeri) Bud dilini, `bud-isa` bytecode'una çeviren derleyici.
+3. **`bud-compiler` (Derleyici):** Yüksek seviyeli Bud/BudL dilini, `bud-isa` bytecode'una çeviren derleyici. `while` ve `for i in start..end` döngüleri dahil temel kontrol akışı desteklenir.
 4. **`bud-proof` (ZK Kanıtlayıcı):** Plonky3 tabanlı, VM'in `Execution Trace`'ini (çalıştırma izi) alıp doğru çalıştığına dair kriptografik kanıt (STARK proof) üreten modül.
 5. **`bud-cli` (Komut Satırı):** Tüm bu modülleri bir araya getiren ve kullanıcıya sunan arayüz.
+
+## Güncel Durum Notu
+
+BudZKVM artık yalnızca bağımsız CLI örnekleriyle değil, Budlum L1 `infra` reposu içinde `TransactionType::ContractCall` execution backend'i olarak da kullanılabilir. L1 tarafı `tx.data` içindeki BudZKVM bytecode'u çalıştırır, gas limit uygular, proof üretip doğrular ve başarılıysa account state'i günceller.
 
 ## İçindekiler
 

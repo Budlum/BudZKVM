@@ -13,6 +13,29 @@ Projemizdeki `bud-compiler` crate'i, Bud adını verdiğimiz yüksek seviyeli ve
 3. **Semantic Analyzer (Anlamsal Analiz):** Değişkenler tanımlanmış mı? Tipler uyuşuyor mu? Kullanılmayan değişken var mı? gibi mantıksal hataları yakalar.
 4. **Code Generation (Kod Üretimi):** İşte bizim ISA'mız burada devreye girer. AST üzerinde gezilerek (traversal) her bir düğüm için uygun `Instruction` üretilir. Örneğin `x = 5` ifadesi `Load R1, 5` komutuna dönüştürülür.
 
+### Kontrol Akışı: `while` ve `for`
+
+Bud dili artık iki temel döngü formunu destekler:
+
+```bud
+while (count < 4) {
+    count = count + 1;
+}
+
+for i in 0..5 {
+    sum = sum + i;
+}
+```
+
+`while` doğrudan condition + `Jnz` + geri `Jmp` desenine çevrilir. `for i in start..end` ise compiler tarafından şu mantığa indirgenir:
+
+1. `start` bir loop register'ına yüklenir.
+2. `end` bir kez hesaplanır ve sabit range sınırı olarak tutulur.
+3. Her iterasyonda `loop_reg < end_reg` karşılaştırılır.
+4. Gövde çalıştıktan sonra `loop_reg = loop_reg + 1` yapılır.
+
+Bu form yarı-açık aralık kullanır: `0..5`, `0,1,2,3,4` değerlerini üretir.
+
 ### Register Tahsisi (Register Allocation)
 
 Derleyici yazmanın en zor kısımlarından biri Register yönetimidir. Bizim 32 adet register'ımız var. Eğer programda 50 tane değişken varsa ne olacak? Derleyici, artık kullanılmayan değişkenlerin (out of scope) register'larını boşa çıkarmalı ve yeni değişkenlere tahsis etmelidir. Çok karmaşık programlarda register'lar dolarsa değişkenler Memory/Storage'a yazılır (Buna "Spilling" denir).
@@ -30,6 +53,17 @@ Sistemin tam akışı şu şekilde işler:
 6. Plonky3, AIR kısıtlamalarını kontrol eder, matris matematiğini uygular ve bir **ZK Proof (Sıfır Bilgi Kanıtı)** üretir.
 7. İsteğe bağlı olarak bu kanıt, `verify` fonksiyonu kullanılarak çok kısa bir sürede doğrulanır.
 
+Örnek döngü programı repo kökünde bulunur:
+
+```bash
+nix develop --command cargo run -p bud-cli -- run --program example_loop.bud
+```
+
+Bu örnek hem `for` hem `while` kullanır. Beklenen event çıktısı `[10, 6]` şeklindedir:
+
+* `for i in 0..5`: `0 + 1 + 2 + 3 + 4 = 10`
+* `while count < 4`: `0 + 1 + 2 + 3 = 6`
+
 ```rust
 // bud-cli içinden örnek bir akış
 let trace = vm.trace; // VM'in ürettiği loglar
@@ -44,6 +78,18 @@ let ok = Prover::verify(&proof, num_steps);
 println!("Proof valid: {}", ok);
 ```
 
+## Budlum L1 Entegrasyonu
+
+BudZKVM bytecode'u artık Budlum L1 `infra` reposu içinde `TransactionType::ContractCall` olarak çalıştırılabilir. Bu entegrasyonda:
+
+1. Client BudZKVM bytecode'u little-endian `u64` instruction byte dizisi olarak `tx.data` alanına koyar.
+2. L1 `src/execution/zkvm.rs` bytecode'u decode eder.
+3. VM gas limitiyle çalıştırılır.
+4. `bud-proof` ile proof üretilir ve verify edilir.
+5. Sadece başarılı execution sonrası sender fee ve nonce state'i güncellenir.
+
+Bu sayede CLI'da üretilen bytecode ile L1 transaction payload formatı aynı kalır.
+
 ## Sonuç ve Gelecek
 
 Tebrikler! Sıfırdan başlayarak, kendi komut setini tanımlayan, kodu çalıştıran ve sonucun doğruluğunu kriptografik olarak kanıtlayan tam teşekküllü bir ZKVM tasarladınız.
@@ -51,6 +97,7 @@ Tebrikler! Sıfırdan başlayarak, kendi komut setini tanımlayan, kodu çalış
 **Peki Sırada Ne Var?**
 * **Memory ve Storage Chiplet:** Şu anda register tablosu üzerinden consistency (tutarlılık) sağlıyoruz. Aynı mantığı (LogUp veya Permutation Argument) kalıcı depolama (RAM/Storage) için kurarak karmaşık akıllı sözleşmeleri destekleyebilirsiniz.
 * **Continuations (Süreklilik):** RAM ve işlem gücü limitleri yüzünden trace boyutu çok büyüyemez. Çok büyük programları kanıtlamak için Execution Trace'i parçalara bölüp (chunk) ayrı ayrı kanıtlamanız ve sonra bunları birleştirmeniz (Recursive Proofs) gerekir.
+* **Contract State Bridge:** Budlum L1 içindeki account state/storage ile BudZKVM `SRead/SWrite` alanını daha güçlü bir state root protokolüne bağlamak gerekir.
 
 Bu rehber, devasa ZK okyanusunda sadece bir başlangıçtı. Artık "ZKVM Nasıl Çalışır?" sorusuna verebilecek koda dayalı, pratik bir yanıtınız var. 
 

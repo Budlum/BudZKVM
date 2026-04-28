@@ -1,5 +1,5 @@
-use crate::lexer::Token;
 use crate::ast::*;
+use crate::lexer::Token;
 use logos::Logos;
 
 pub struct Parser<'a> {
@@ -10,7 +10,9 @@ pub struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     pub fn new(source: &'a str) -> Self {
-        let tokens = Token::lexer(source).map(|t| t.unwrap_or(Token::Error)).collect();
+        let tokens = Token::lexer(source)
+            .map(|t| t.unwrap_or(Token::Error))
+            .collect();
         Self {
             tokens,
             pos: 0,
@@ -48,7 +50,7 @@ impl<'a> Parser<'a> {
         };
 
         self.expect(Token::BraceOpen);
-        
+
         let mut functions = Vec::new();
         let mut storage = Vec::new();
         let mut structs = Vec::new();
@@ -59,18 +61,34 @@ impl<'a> Parser<'a> {
                     self.consume();
                     self.expect(Token::BraceOpen);
                     while self.peek() != &Token::BraceClose {
-                        let name = if let Token::Ident(name) = self.consume() { name } else { panic!("Expected name") };
+                        let name = if let Token::Ident(name) = self.consume() {
+                            name
+                        } else {
+                            panic!("Expected name")
+                        };
                         self.expect(Token::Colon);
-                        let ty = if let Token::Ident(ty) = self.consume() { 
+                        let ty = if let Token::Ident(ty) = self.consume() {
                             if ty == "Map" {
                                 self.expect(Token::Lt);
-                                let k = if let Token::Ident(k) = self.consume() { k } else { panic!("Ex") };
+                                let k = if let Token::Ident(k) = self.consume() {
+                                    k
+                                } else {
+                                    panic!("Ex")
+                                };
                                 self.expect(Token::Comma);
-                                let v = if let Token::Ident(v) = self.consume() { v } else { panic!("Ex") };
+                                let v = if let Token::Ident(v) = self.consume() {
+                                    v
+                                } else {
+                                    panic!("Ex")
+                                };
                                 self.expect(Token::Gt);
                                 format!("Map<{},{}>", k, v)
-                            } else { ty }
-                        } else { panic!("Expected type") };
+                            } else {
+                                ty
+                            }
+                        } else {
+                            panic!("Expected type")
+                        };
                         self.expect(Token::Comma);
                         storage.push(StorageField { name, ty });
                     }
@@ -78,15 +96,30 @@ impl<'a> Parser<'a> {
                 }
                 Token::Struct => {
                     self.consume();
-                    let name = if let Token::Ident(name) = self.consume() { name } else { panic!("Expected name") };
+                    let name = if let Token::Ident(name) = self.consume() {
+                        name
+                    } else {
+                        panic!("Expected name")
+                    };
                     self.expect(Token::BraceOpen);
                     let mut fields = Vec::new();
                     while self.peek() != &Token::BraceClose {
-                        let fname = if let Token::Ident(n) = self.consume() { n } else { panic!("Expected name") };
+                        let fname = if let Token::Ident(n) = self.consume() {
+                            n
+                        } else {
+                            panic!("Expected name")
+                        };
                         self.expect(Token::Colon);
-                        let fty = if let Token::Ident(t) = self.consume() { t } else { panic!("Expected type") };
+                        let fty = if let Token::Ident(t) = self.consume() {
+                            t
+                        } else {
+                            panic!("Expected type")
+                        };
                         self.expect(Token::Comma);
-                        fields.push(StorageField { name: fname, ty: fty });
+                        fields.push(StorageField {
+                            name: fname,
+                            ty: fty,
+                        });
                     }
                     self.expect(Token::BraceClose);
                     structs.push(Struct { name, fields });
@@ -124,11 +157,21 @@ impl<'a> Parser<'a> {
         self.expect(Token::ParenOpen);
         let mut params = Vec::new();
         while self.peek() != &Token::ParenClose {
-            let name = if let Token::Ident(name) = self.consume() { name } else { panic!("Expected param name") };
+            let name = if let Token::Ident(name) = self.consume() {
+                name
+            } else {
+                panic!("Expected param name")
+            };
             self.expect(Token::Colon);
-            let ty = if let Token::Ident(ty) = self.consume() { ty } else { panic!("Expected param type") };
+            let ty = if let Token::Ident(ty) = self.consume() {
+                ty
+            } else {
+                panic!("Expected param type")
+            };
             params.push(Param { name, ty });
-            if self.peek() == &Token::Comma { self.consume(); }
+            if self.peek() == &Token::Comma {
+                self.consume();
+            }
         }
         self.expect(Token::ParenClose);
 
@@ -173,7 +216,11 @@ impl<'a> Parser<'a> {
                 self.consume();
                 self.expect(Token::Colon);
                 self.expect(Token::Colon);
-                let name = if let Token::Ident(name) = self.consume() { name } else { panic!("Expected name") };
+                let name = if let Token::Ident(name) = self.consume() {
+                    name
+                } else {
+                    panic!("Expected name")
+                };
                 self.expect(Token::Assign);
                 let expr = self.parse_expr();
                 self.expect(Token::Semicolon);
@@ -190,7 +237,7 @@ impl<'a> Parser<'a> {
                     then_branch.push(self.parse_stmt());
                 }
                 self.expect(Token::BraceClose);
-                
+
                 let mut else_branch = None;
                 if self.peek() == &Token::Else {
                     self.consume();
@@ -217,6 +264,30 @@ impl<'a> Parser<'a> {
                 self.expect(Token::BraceClose);
                 Stmt::While(cond, body)
             }
+            Token::For => {
+                self.consume();
+                let var = if let Token::Ident(name) = self.consume() {
+                    name
+                } else {
+                    panic!("Expected loop variable after for");
+                };
+                self.expect(Token::In);
+                let start = self.parse_expr();
+                self.expect(Token::DotDot);
+                let end = self.parse_expr();
+                self.expect(Token::BraceOpen);
+                let mut body = Vec::new();
+                while self.peek() != &Token::BraceClose {
+                    body.push(self.parse_stmt());
+                }
+                self.expect(Token::BraceClose);
+                Stmt::For {
+                    var,
+                    start,
+                    end,
+                    body,
+                }
+            }
             Token::Return => {
                 self.consume();
                 let expr = if self.peek() != &Token::Semicolon {
@@ -229,12 +300,18 @@ impl<'a> Parser<'a> {
             }
             Token::Ident(name) if name == "emit" => {
                 self.consume();
-                let event_name = if let Token::Ident(en) = self.consume() { en } else { panic!("Expected event name") };
+                let event_name = if let Token::Ident(en) = self.consume() {
+                    en
+                } else {
+                    panic!("Expected event name")
+                };
                 self.expect(Token::ParenOpen);
                 let mut args = Vec::new();
                 while self.peek() != &Token::ParenClose {
                     args.push(self.parse_expr());
-                    if self.peek() == &Token::Comma { self.consume(); }
+                    if self.peek() == &Token::Comma {
+                        self.consume();
+                    }
                 }
                 self.expect(Token::ParenClose);
                 self.expect(Token::Semicolon);
@@ -268,8 +345,11 @@ impl<'a> Parser<'a> {
 
     fn parse_expr(&mut self) -> Expr {
         let mut left = self.parse_arith();
-        
-        while matches!(self.peek(), Token::Eq | Token::Neq | Token::Lt | Token::Gt | Token::Lte | Token::Gte) {
+
+        while matches!(
+            self.peek(),
+            Token::Eq | Token::Neq | Token::Lt | Token::Gt | Token::Lte | Token::Gte
+        ) {
             let op = match self.consume() {
                 Token::Eq => BinOp::Eq,
                 Token::Neq => BinOp::Neq,
@@ -288,8 +368,11 @@ impl<'a> Parser<'a> {
 
     fn parse_arith(&mut self) -> Expr {
         let mut left = self.parse_primary();
-        
-        while matches!(self.peek(), Token::Plus | Token::Minus | Token::Star | Token::Slash) {
+
+        while matches!(
+            self.peek(),
+            Token::Plus | Token::Minus | Token::Star | Token::Slash
+        ) {
             let op = match self.consume() {
                 Token::Plus => BinOp::Add,
                 Token::Minus => BinOp::Sub,
@@ -313,21 +396,31 @@ impl<'a> Parser<'a> {
                     let mut args = Vec::new();
                     while self.peek() != &Token::ParenClose {
                         args.push(self.parse_expr());
-                        if self.peek() == &Token::Comma { self.consume(); }
+                        if self.peek() == &Token::Comma {
+                            self.consume();
+                        }
                     }
                     self.expect(Token::ParenClose);
                     Expr::Call("poseidon".to_string(), args)
                 } else if name == "msg" {
                     self.expect(Token::Colon);
                     self.expect(Token::Colon);
-                    let field = if let Token::Ident(f) = self.consume() { f } else { panic!("Expected field") };
+                    let field = if let Token::Ident(f) = self.consume() {
+                        f
+                    } else {
+                        panic!("Expected field")
+                    };
                     self.expect(Token::ParenOpen);
                     self.expect(Token::ParenClose);
                     Expr::Call(format!("msg::{}", field), Vec::new())
                 } else if name == "block" {
                     self.expect(Token::Colon);
                     self.expect(Token::Colon);
-                    let field = if let Token::Ident(f) = self.consume() { f } else { panic!("Expected field") };
+                    let field = if let Token::Ident(f) = self.consume() {
+                        f
+                    } else {
+                        panic!("Expected field")
+                    };
                     self.expect(Token::ParenOpen);
                     self.expect(Token::ParenClose);
                     Expr::Call(format!("block::{}", field), Vec::new())
@@ -352,7 +445,11 @@ impl<'a> Parser<'a> {
             Token::Storage => {
                 self.expect(Token::Colon);
                 self.expect(Token::Colon);
-                let name = if let Token::Ident(name) = self.consume() { name } else { panic!("Expected name") };
+                let name = if let Token::Ident(name) = self.consume() {
+                    name
+                } else {
+                    panic!("Expected name")
+                };
                 Expr::StorageRead(name)
             }
             _ => panic!("Expected primary expression"),

@@ -1,15 +1,11 @@
 use crate::ast::*;
 use std::collections::HashSet;
 
-pub struct SemanticAnalyzer {
-    symbols: HashSet<String>,
-}
+pub struct SemanticAnalyzer {}
 
 impl SemanticAnalyzer {
     pub fn new() -> Self {
-        Self {
-            symbols: HashSet::new(),
-        }
+        Self {}
     }
 
     pub fn analyze(&mut self, contract: &Contract) {
@@ -67,6 +63,19 @@ impl SemanticAnalyzer {
                         self.analyze_stmt_recursive(s, &mut local_symbols);
                     }
                 }
+                Stmt::For {
+                    var,
+                    start,
+                    end,
+                    body,
+                } => {
+                    self.analyze_expr(start, &local_symbols);
+                    self.analyze_expr(end, &local_symbols);
+                    local_symbols.insert(var.clone());
+                    for s in body {
+                        self.analyze_stmt_recursive(s, &mut local_symbols);
+                    }
+                }
                 Stmt::Return(expr) => {
                     if let Some(e) = expr {
                         self.analyze_expr(e, &local_symbols);
@@ -85,8 +94,37 @@ impl SemanticAnalyzer {
                 self.analyze_expr(expr, symbols);
                 symbols.insert(name.clone());
             }
+            Stmt::Constrain(expr) => {
+                self.analyze_expr(expr, symbols);
+            }
+            Stmt::Assign(name, expr) => {
+                if !symbols.contains(name) {
+                    panic!("Undefined variable: {}", name);
+                }
+                self.analyze_expr(expr, symbols);
+            }
+            Stmt::StorageWrite(_, expr) => {
+                self.analyze_expr(expr, symbols);
+            }
+            Stmt::MappingWrite(_, key, val) => {
+                self.analyze_expr(key, symbols);
+                self.analyze_expr(val, symbols);
+            }
             Stmt::While(cond, body) => {
                 self.analyze_expr(cond, symbols);
+                for s in body {
+                    self.analyze_stmt_recursive(s, symbols);
+                }
+            }
+            Stmt::For {
+                var,
+                start,
+                end,
+                body,
+            } => {
+                self.analyze_expr(start, symbols);
+                self.analyze_expr(end, symbols);
+                symbols.insert(var.clone());
                 for s in body {
                     self.analyze_stmt_recursive(s, symbols);
                 }
@@ -107,7 +145,14 @@ impl SemanticAnalyzer {
                     self.analyze_expr(e, symbols);
                 }
             }
-            _ => {}
+            Stmt::Emit(_, args) => {
+                for arg in args {
+                    self.analyze_expr(arg, symbols);
+                }
+            }
+            Stmt::Expr(expr) => {
+                self.analyze_expr(expr, symbols);
+            }
         }
     }
 

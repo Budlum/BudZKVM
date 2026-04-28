@@ -9,8 +9,10 @@ Sıradan bir yazılım geliştiricisi için VM yazmak karmaşık bir `switch-cas
 Bir VM'in anlık halini (State) neler oluşturur?
 1. **Program Counter (PC):** Şu an hangi komut satırını çalıştırıyoruz?
 2. **Registers:** R0'dan R31'e kadar register'ların o anki değerleri.
-3. **Memory/Storage:** Uygulamanın kalıcı veri depolama alanı.
-4. **Execution Trace (Çalıştırma İzi):** Geçmişte yapılan tüm işlemlerin "log" kayıtları (ZKVM'ler için kritik!).
+3. **Stack:** `Call`, `Ret`, `Push`, `Pop` için kullanılan küçük yürütme yığını.
+4. **Memory/Storage:** Uygulamanın geçici memory ve key-value storage alanı.
+5. **Gas Sayaçları:** `gas_used` ve `gas_limit`. Sonsuz döngü ve DoS risklerini kesmek için her instruction maliyetlendirir.
+6. **Execution Trace (Çalıştırma İzi):** Geçmişte yapılan tüm işlemlerin "log" kayıtları (ZKVM'ler için kritik!).
 
 ## Çalıştırma Döngüsü (Fetch-Decode-Execute)
 
@@ -20,48 +22,88 @@ Bir işlemcinin klasik döngüsüdür:
 2. **Decode (Çöz):** Komutun içindeki Opcode, src1, src2, dst ve imm değerlerini ayrıştır.
 3. **Execute (Çalıştır):** Opcode'un gerektirdiği işlemi yap, sonucu `dst` register'ına yaz ve `PC`'yi bir sonraki komuta geçir.
 
-`bud-vm/src/lib.rs` içindeki `step()` fonksiyonu tam olarak bunu yapar:
+`bud-vm/src/lib.rs` içindeki `step(program)` fonksiyonu tam olarak bunu yapar:
 
 ```rust
-pub fn step(&mut self) -> Result<bool, VmError> {
+pub fn step(&mut self, program: &[u64]) {
     // 1. Fetch
-    let instruction = self.program.get(self.pc).unwrap();
+    let raw_inst = program[self.pc];
+    let inst = Instruction::decode(raw_inst);
+    let cur_pc = self.pc;
+
+    // Her instruction gas tüketir.
+    self.consume_gas(Self::gas_cost(inst.opcode));
     
-    // 2. Decode (Önceden ayrıştırılmış Instruction struct'ını kullanıyoruz)
-    let src1_val = self.registers[instruction.src1 as usize];
-    let src2_val = self.registers[instruction.src2 as usize];
-    let mut dst_val = 0;
-    let mut next_pc = self.pc + 1; // Default olarak bir sonraki satır
+    // 2. Decode
+    let src1_val = self.registers[inst.rs1 as usize];
+    let src2_val = self.registers[inst.rs2 as usize];
 
     // 3. Execute
-    match instruction.opcode {
-        Opcode::Add => dst_val = src1_val.wrapping_add(src2_val),
-        Opcode::Load => dst_val = instruction.imm as u64,
-        Opcode::Jmp => next_pc = (self.pc as i32 + instruction.imm) as usize,
+    let (dst_val, next_pc) = match inst.opcode {
+        Opcode::Add => {
+            let result = src1_val.wrapping_add(src2_val);
+            self.registers[inst.rd as usize] = result;
+            self.pc += 1;
+            (result, cur_pc + 1)
+        }
+        Opcode::Call => {
+            let target = (cur_pc as i64 + inst.imm as i64) as usize;
+            self.stack.push((cur_pc + 1) as u64);
+            self.pc = target;
+            ((cur_pc + 1) as u64, target)
+        }
+        Opcode::Ret => {
+            let target = self.stack.pop().expect("Return stack underflow") as usize;
+            self.pc = target;
+            (target as u64, target)
+        }
+        Opcode::Halt => {
+            self.halted = true;
+            (0, cur_pc)
+        }
         // Diğer opcode'lar...
-        Opcode::Halt => return Ok(false), // Döngüyü kır
-    }
-
-    // Register'ı güncelle
-    self.registers[instruction.dst as usize] = dst_val;
+    };
 
     // Execution Trace'i kaydet!
     self.trace.push(Step {
-        pc: self.pc,
-        instruction: instruction.clone(),
-        src1_idx: instruction.src1,
-        src2_idx: instruction.src2,
-        dst_idx: instruction.dst,
+        pc: cur_pc,
+        instruction: inst,
+        src1_idx: inst.rs1,
+        src2_idx: inst.rs2,
+        dst_idx: inst.rd,
         src1_val,
         src2_val,
         dst_val,
         next_pc,
     });
 
-    self.pc = next_pc;
-    Ok(true) // Çalışmaya devam et
 }
 ```
+
+## Gas Metering
+
+`Vm::new(memory_size)` varsayılan olarak `1_000_000` gas limiti ile gelir. Test ve L1 entegrasyonları için `Vm::with_gas_limit(memory_size, gas_limit)` kullanılabilir.
+
+Gas maliyetleri bilinçli olarak basit tutulmuştur:
+
+* Basit ALU ve branch komutları çoğunlukla `1` gas.
+* `Load`, `Store`, `SRead`, `SWrite` gibi memory/storage işlemleri `3` gas.
+* `Call`, `Ret`, `Push`, `Pop` `2` gas.
+* `Syscall` `5` gas.
+* `Poseidon` ve `VerifyMerkle` `10` gas.
+
+Limit aşılırsa VM `Out of gas` hatasıyla durur. Budlum L1 entegrasyonunda bu hata transaction failure'a çevrilir ve sender state'i atomik olarak değişmeden kalır.
+
+## Call Stack ve Stack Opcodes
+
+BudZKVM'in ana veri modeli register tabanlıdır, fakat `Call`, `Ret`, `Push`, `Pop` için VM içinde `Vec<u64>` tabanlı bir stack vardır.
+
+* `Call`: dönüş adresini stack'e koyar.
+* `Ret`: dönüş adresini stack'ten alır.
+* `Push`: `rs1` register değerini stack'e koyar.
+* `Pop`: stack'ten aldığı değeri `rd` register'ına yazar.
+
+Stack underflow durumları panic ile yakalanır. Bu davranış, proof/backend katmanında başarısız execution olarak ele alınır.
 
 ## Neden Execution Trace (İz) Kaydediyoruz?
 
