@@ -3,7 +3,6 @@ use crate::plonky3_air::*;
 use bud_vm::Step;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_goldilocks::Goldilocks;
-use p3_field::PrimeField64;
 use p3_uni_stark::{prove, verify, StarkConfig};
 use p3_keccak::Keccak256Hash;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};

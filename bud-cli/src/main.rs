@@ -109,7 +109,6 @@ fn main() {
             
             println!("Emitted Events: {:?}", vm.events);
             
-            let num_steps = vm.trace.len();
             let proof = Prover::prove(&vm.trace, vm.trace.len());
         println!("Proof generated ({} bytes)", proof.data.len());
 
@@ -118,7 +117,7 @@ fn main() {
 
             println!("Post-state Root: {:?}", state.root());
         }
-        Commands::Batch { programs, sender, nonce, block_height, args } => {
+        Commands::Batch { programs, sender, nonce, block_height, args: _ } => {
             println!("Processing block with {} transactions...", programs.len());
             let mut all_proofs = Vec::new();
             
