@@ -1,7 +1,7 @@
-use clap::{Parser, Subcommand};
-use bud_vm::Vm;
 use bud_isa::{Instruction, Opcode};
-use bud_proof::{ProverAdapter, DefaultAdapter as Prover};
+use bud_proof::{DefaultAdapter as Prover, ProverAdapter};
+use bud_vm::Vm;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -63,11 +63,17 @@ fn main() {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Run { program, sender, nonce, block_height, args } => {
+        Commands::Run {
+            program,
+            sender,
+            nonce,
+            block_height,
+            args,
+        } => {
             let content = std::fs::read_to_string(program).expect("Failed to read file");
             let mut parser = bud_compiler::parser::Parser::new(&content);
             let contract = parser.parse_contract();
-            
+
             let mut sema = bud_compiler::sema::SemanticAnalyzer::new();
             sema.analyze(&contract);
 
@@ -76,26 +82,33 @@ fn main() {
 
             let mut codegen = bud_compiler::codegen::Codegen::new();
             let bytecode = codegen.generate(&contract);
-            
+
             println!("Generated {} instructions", bytecode.len());
 
             let mut vm = bud_vm::Vm::new(1024);
-            if let Some(s) = *sender { 
+            if let Some(s) = *sender {
                 vm.context.sender = s;
-                let acc = state.accounts.entry(s).or_insert(bud_state::Account { balance: 1000, nonce: 0 });
+                let acc = state.accounts.entry(s).or_insert(bud_state::Account {
+                    balance: 1000,
+                    nonce: 0,
+                });
                 vm.context.nonce = acc.nonce;
             }
-            if let Some(n) = *nonce { vm.context.nonce = n; }
-            if let Some(bh) = *block_height { vm.context.block_height = bh; }
-            
+            if let Some(n) = *nonce {
+                vm.context.nonce = n;
+            }
+            if let Some(bh) = *block_height {
+                vm.context.block_height = bh;
+            }
+
             for (i, val) in args.iter().enumerate() {
                 if i < 31 {
                     vm.registers[i + 1] = *val;
                 }
             }
-            
+
             vm.run(&bytecode);
-            
+
             if let Some(s) = *sender {
                 let acc = state.accounts.get_mut(&s).unwrap();
                 acc.nonce += 1;
@@ -104,41 +117,56 @@ fn main() {
 
             println!("Execution Trace (Steps: {})", vm.trace.len());
             for (i, step) in vm.trace.iter().enumerate() {
-                println!("Step {}: PC={} OP={:?} R1={}", i, step.pc, step.instruction.opcode, step.registers[1]);
+                println!(
+                    "Step {}: PC={} OP={:?} R1={}",
+                    i, step.pc, step.instruction.opcode, step.registers[1]
+                );
             }
-            
-            println!("Emitted Events: {:?}", vm.events);
-            
-            let proof = Prover::prove(&vm.trace, vm.trace.len());
-        println!("Proof generated ({} bytes)", proof.data.len());
 
-        let ok = Prover::verify(&proof, vm.trace.len());
+            println!("Emitted Events: {:?}", vm.events);
+
+            let proof = Prover::prove(&vm.trace, vm.trace.len());
+            println!("Proof generated ({} bytes)", proof.data.len());
+
+            let ok = Prover::verify(&proof, vm.trace.len());
             println!("Proof valid: {}", ok);
 
             println!("Post-state Root: {:?}", state.root());
         }
-        Commands::Batch { programs, sender, nonce, block_height, args: _ } => {
+        Commands::Batch {
+            programs,
+            sender,
+            nonce,
+            block_height,
+            args: _,
+        } => {
             println!("Processing block with {} transactions...", programs.len());
             let mut all_proofs = Vec::new();
-            
+
             for p in programs {
                 let content = std::fs::read_to_string(p).expect("Failed to read file");
                 let mut parser = bud_compiler::parser::Parser::new(&content);
                 let contract = parser.parse_contract();
                 let mut codegen = bud_compiler::codegen::Codegen::new();
                 let bytecode = codegen.generate(&contract);
-                
+
                 let mut vm = bud_vm::Vm::new(1024);
-                if let Some(s) = *sender { vm.context.sender = s; }
-                if let Some(n) = *nonce { vm.context.nonce = n; }
-                if let Some(bh) = *block_height { vm.context.block_height = bh; }
-                
+                if let Some(s) = *sender {
+                    vm.context.sender = s;
+                }
+                if let Some(n) = *nonce {
+                    vm.context.nonce = n;
+                }
+                if let Some(bh) = *block_height {
+                    vm.context.block_height = bh;
+                }
+
                 vm.run(&bytecode);
-                
+
                 let proof = Prover::prove(&vm.trace, vm.trace.len());
                 all_proofs.push(proof);
             }
-            
+
             if !all_proofs.is_empty() {
                 println!("Final Block Proof Hash: {:?}", all_proofs[0].data.len());
             }
@@ -149,13 +177,23 @@ fn main() {
             let contract = parser.parse_contract();
             let mut codegen = bud_compiler::codegen::Codegen::new();
             let bytecode = codegen.generate(&contract);
-            
-            let out_name = output.clone().unwrap_or_else(|| format!("{}.budc", program));
-            let bytes: Vec<u8> = bytecode.iter().flat_map(|&b| b.to_le_bytes().to_vec()).collect();
+
+            let out_name = output
+                .clone()
+                .unwrap_or_else(|| format!("{}.budc", program));
+            let bytes: Vec<u8> = bytecode
+                .iter()
+                .flat_map(|&b| b.to_le_bytes().to_vec())
+                .collect();
             std::fs::write(&out_name, bytes).expect("Failed to write bytecode");
             println!("Contract deployed to: {}", out_name);
         }
-        Commands::Call { bytecode, sender, nonce, args } => {
+        Commands::Call {
+            bytecode,
+            sender,
+            nonce,
+            args,
+        } => {
             let bytes = std::fs::read(&bytecode).expect("Failed to read bytecode");
             let mut prog = Vec::new();
             for chunk in bytes.chunks_exact(8) {
@@ -163,22 +201,29 @@ fn main() {
                 b.copy_from_slice(chunk);
                 prog.push(u64::from_le_bytes(b));
             }
-            
+
             let mut state = bud_state::State::load("state.json");
             println!("Pre-state Root: {:?}", state.root());
 
             let mut vm = bud_vm::Vm::new(1024);
-            if let Some(s) = *sender { 
+            if let Some(s) = *sender {
                 vm.context.sender = s;
-                let acc = state.accounts.entry(s).or_insert(bud_state::Account { balance: 1000, nonce: 0 });
+                let acc = state.accounts.entry(s).or_insert(bud_state::Account {
+                    balance: 1000,
+                    nonce: 0,
+                });
                 vm.context.nonce = acc.nonce;
             }
-            if let Some(n) = *nonce { vm.context.nonce = n; }
-            
-            for (i, val) in args.iter().enumerate() {
-                if i < 31 { vm.registers[i + 1] = *val; }
+            if let Some(n) = *nonce {
+                vm.context.nonce = n;
             }
-            
+
+            for (i, val) in args.iter().enumerate() {
+                if i < 31 {
+                    vm.registers[i + 1] = *val;
+                }
+            }
+
             vm.run(&prog);
 
             if let Some(s) = *sender {
@@ -188,7 +233,7 @@ fn main() {
             state.save();
             println!("Execution Trace (Steps: {})", vm.trace.len());
             println!("Emitted Events: {:?}", vm.events);
-            
+
             let num_steps = vm.trace.len();
             let proof = Prover::prove(&vm.trace, num_steps);
             Prover::verify(&proof, num_steps);
@@ -208,8 +253,22 @@ fn main() {
         Commands::Test => {
             let mut vm = Vm::new(1024);
             let prog = vec![
-                Instruction { opcode: Opcode::Add, rd: 1, rs1: 2, rs2: 3, imm: 0 }.encode(),
-                Instruction { opcode: Opcode::Halt, rd: 0, rs1: 0, rs2: 0, imm: 0 }.encode(),
+                Instruction {
+                    opcode: Opcode::Add,
+                    rd: 1,
+                    rs1: 2,
+                    rs2: 3,
+                    imm: 0,
+                }
+                .encode(),
+                Instruction {
+                    opcode: Opcode::Halt,
+                    rd: 0,
+                    rs1: 0,
+                    rs2: 0,
+                    imm: 0,
+                }
+                .encode(),
             ];
             vm.registers[2] = 10;
             vm.registers[3] = 20;

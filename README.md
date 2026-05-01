@@ -71,6 +71,18 @@ For the prover crate only:
 cargo test -p bud-proof
 ```
 
+### Development Command Matrix
+
+Common workspace, crate-specific, CLI, and release-check commands are documented in
+[`docs/development.md`](docs/development.md). The local CI equivalent is:
+
+```bash
+nix develop --command cargo fmt --all -- --check
+nix develop --command cargo check
+nix develop --command cargo test
+nix develop --command python3 scripts/check_docs_links.py
+```
+
 ### Compile and Run a Program
 
 ```bash
@@ -122,10 +134,10 @@ Status: mostly complete, continuously maintained.
 - [x] Keep `cargo check` as the minimum workspace health gate.
 - [x] Keep crate boundaries clear enough that prover changes do not require language or CLI rewrites.
 - [x] Maintain example Bud programs such as `example.bud`, `example_loop.bud`, and `test_prover.bud`.
-- [ ] Add a documented command matrix for common development workflows.
-- [ ] Add CI jobs for `cargo check`, `cargo test`, formatting, and docs link checks.
-- [ ] Add a contributor guide explaining how to add an opcode from ISA to VM to AIR to tests.
-- [ ] Add a lightweight release checklist for proof-format changes.
+- [x] Add a documented command matrix for common development workflows.
+- [x] Add CI jobs for `cargo check`, `cargo test`, formatting, and docs link checks.
+- [x] Add a contributor guide explaining how to add an opcode from ISA to VM to AIR to tests.
+- [x] Add a lightweight release checklist for proof-format changes.
 
 ### Phase 1: ISA and Bytecode Foundation
 

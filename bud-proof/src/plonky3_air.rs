@@ -1,4 +1,4 @@
-use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, WindowAccess};
 use p3_field::PrimeCharacteristicRing;
 
 pub const TRACE_WIDTH: usize = 49;
@@ -223,32 +223,63 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
         builder.when_first_row().assert_zero(cur_clk);
         builder.when_first_row().assert_zero(cur_pc);
 
+        let perm = builder.permutation();
+        let perm_cur = perm.current_slice();
+        let perm_nxt = perm.next_slice();
         let rand = builder.permutation_randomness();
-        if rand.len() >= 2 {
+        if rand.len() >= 2 && perm_cur.len() >= 2 && perm_nxt.len() >= 2 {
             let alpha = rand[0];
             let beta = rand[1];
 
             let rs1_idx: AB::Expr = cur[COL_RS1_IDX].into();
-            let _rs2_idx: AB::Expr = cur[COL_RS2_IDX].into();
-            let _rd_idx: AB::Expr = cur[COL_RD_IDX].into();
-            let _reg_clk: AB::Expr = cur[COL_REG_CLK].into();
-            let _reg_idx: AB::Expr = cur[COL_REG_IDX].into();
-            let _reg_val: AB::Expr = cur[COL_REG_VAL].into();
-            let _reg_is_write: AB::Expr = cur[COL_REG_IS_WRITE].into();
+            let rs2_idx: AB::Expr = cur[COL_RS2_IDX].into();
+            let rd_idx: AB::Expr = cur[COL_RD_IDX].into();
+            let reg_clk: AB::Expr = cur[COL_REG_CLK].into();
+            let reg_idx: AB::Expr = cur[COL_REG_IDX].into();
+            let reg_val: AB::Expr = cur[COL_REG_VAL].into();
+            let reg_is_write: AB::Expr = cur[COL_REG_IS_WRITE].into();
 
             let alpha_expr: AB::ExprEF = alpha.into();
             let beta_expr: AB::ExprEF = beta.into();
-
-            let cclk: AB::ExprEF = clk.into();
-            let crs1_idx: AB::ExprEF = rs1_idx.into();
-            let crs1_val: AB::ExprEF = rs1_val.into();
             let b2 = beta_expr.clone() * beta_expr.clone();
             let b3 = b2.clone() * beta_expr.clone();
+            let b4 = b3.clone() * beta_expr.clone();
 
-            let _term1 = alpha_expr.clone()
-                + beta_expr.clone() * cclk.clone()
-                + b2.clone() * crs1_idx
-                + b3.clone() * crs1_val;
+            let term =
+                |clk: AB::Expr, idx: AB::Expr, val: AB::Expr, is_write: AB::Expr| -> AB::ExprEF {
+                    let clk: AB::ExprEF = clk.into();
+                    let idx: AB::ExprEF = idx.into();
+                    let val: AB::ExprEF = val.into();
+                    let is_write: AB::ExprEF = is_write.into();
+                    alpha_expr.clone()
+                        + beta_expr.clone() * clk
+                        + b2.clone() * idx
+                        + b3.clone() * val
+                        + b4.clone() * is_write
+                };
+
+            let cpu_packet = term(clk.clone(), rs1_idx, rs1_val.clone(), AB::Expr::ZERO)
+                * term(clk.clone(), rs2_idx, rs2_val.clone(), AB::Expr::ZERO)
+                * term(clk.clone(), rd_idx, rd_val_new.clone(), one.clone());
+            let reg_packet = term(reg_clk, reg_idx, reg_val, reg_is_write);
+
+            let cpu_acc_cur: AB::ExprEF = perm_cur[0].into();
+            let cpu_acc_nxt: AB::ExprEF = perm_nxt[0].into();
+            let reg_acc_cur: AB::ExprEF = perm_cur[1].into();
+            let reg_acc_nxt: AB::ExprEF = perm_nxt[1].into();
+            let is_cpu_ext: AB::ExprEF = is_cpu.clone().into();
+            let not_cpu_ext: AB::ExprEF = (one.clone() - is_cpu).into();
+            let r_active_ext: AB::ExprEF = r_active.clone().into();
+            let not_r_active_ext: AB::ExprEF = (one - r_active).into();
+
+            builder.when_first_row().assert_one_ext(cpu_acc_cur.clone());
+            builder.when_first_row().assert_one_ext(reg_acc_cur.clone());
+            builder.when_transition().assert_zero_ext(
+                cpu_acc_nxt - cpu_acc_cur * (is_cpu_ext * cpu_packet + not_cpu_ext),
+            );
+            builder.when_transition().assert_zero_ext(
+                reg_acc_nxt - reg_acc_cur * (r_active_ext * reg_packet + not_r_active_ext),
+            );
         }
     }
 }

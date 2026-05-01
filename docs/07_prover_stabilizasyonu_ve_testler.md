@@ -72,7 +72,12 @@ BudZKVM prover mimarisi iki fazlıdır:
 
 Bu yapı cross-table lookup ve permutation kuralları için gereklidir. Örneğin CPU tablosundaki bir register okuması, register event tablosundaki önceki yazma ile bağlanmak istediğinde sadece ana trace yeterli olmaz. Lookup accumulator değerleri challenge'a bağlı olarak auxiliary trace içinde taşınır.
 
-Şu anki stabilizasyon aşamasında auxiliary trace iskeleti hazır tutulur. Adapter tarafında `generate_aux_trace` benzeri kapatma fonksiyonu Fiat-Shamir randomness değerlerini alır ve yardımcı matrisi üretir. Gerçek register/memory permutation mantığı eklendikçe bu fonksiyon all-one placeholder yerine accumulator sütunları hesaplayacaktır.
+Güncel stabilizasyon aşamasında auxiliary trace artık boş bir placeholder değildir. Adapter tarafındaki `generate_aux_trace` kapatma fonksiyonu Fiat-Shamir randomness değerlerini alır ve iki gerçek register accumulator sütunu üretir:
+
+* CPU register erişimleri accumulator'ı: her CPU satırındaki `rs1`, `rs2` okumasını ve `rd` yazmasını tek bir çarpımsal packet olarak biriktirir.
+* Register event tablosu accumulator'ı: ana trace içindeki register event sütunlarını aynı randomness ile packet'leyip biriktirir.
+
+Bu iki sütun henüz tam cross-table equality argümanının son hali değildir; ama Phase 6 için kritik eşiği geçer: auxiliary trace artık transcript challenge'larına bağlı gerçek witness verisi taşır ve AIR bu geçişleri constraint eder. Memory lookup tarafı hâlâ sonraki iş olarak durur.
 
 ## Constraint Folder Ne İşe Yarar?
 
@@ -125,6 +130,8 @@ Doğrulama tarafında akış tersine döner:
 
 Bu adapter'ın amacı CLI, L1 entegrasyonu veya testlerin Plonky3 iç tiplerini bilmesini engellemektir.
 
+Auxiliary trace üretimi de adapter sınırında tutulur. `plonky3_prover.rs` önce main trace matrisini oluşturur, sonra aynı matristen register accumulator'ları hesaplayacak closure'ı prover'a verir. Böylece `bud_stark` çekirdeği sadece iki fazlı protokolü bilir; BudVM'e özgü register packet ayrıntıları adapter/AIR katmanında kalır.
+
 ## Test Stratejisi
 
 Stabilizasyon testleri iki sınıfta düşünülmelidir.
@@ -152,7 +159,9 @@ Mevcut stabilizasyon çalışmasıyla hedeflenen taban şudur:
 * `bud-proof` testleri Goldilocks field üzerinde proof üretip doğrular.
 * Proof byte dizisi `bincode` üzerinden taşınabilir.
 * Main trace ve auxiliary trace için folder iskeleti aynı AIR'e bağlanır.
+* Auxiliary trace register accumulator sütunları üretir ve AIR bu sütunların geçişlerini denetler.
 * Sub builder yeni pencere API'siyle uyumludur.
+* Phase 0 geliştirme hijyeni için komut matrisi, CI workflow'u, opcode katkı rehberi, proof-format checklist'i ve yerel Markdown link checker bulunur.
 
 Bu noktadan sonra yapılacak işler daha hedeflidir. Artık derleyici hatalarının çoğu tip sistemi gürültüsü olmaktan çıkar, gerçek AIR veya lookup mantığına işaret eder.
 
@@ -160,7 +169,8 @@ Bu noktadan sonra yapılacak işler daha hedeflidir. Artık derleyici hataların
 
 Stabil tabanın üstüne şu işler eklenmelidir:
 
-* Auxiliary trace placeholder'ı gerçek register permutation accumulator'larıyla değiştirmek.
+* CPU ve register accumulator'larının final equality koşulunu netleştirmek.
+* Memory tabloları için event shape ve accumulator sütunlarını eklemek.
 * CPU, register ve memory tabloları arasında cross-table lookup kurallarını tamamlamak.
 * Public input bağlamını netleştirmek: program hash, başlangıç state'i ve final state proof'a bağlanmalı.
 * `COL_IS_HALT` kısıtını ayrıca denetlemek: halt sonrası satırlar program sonunu zayıflatmamalı.

@@ -1,5 +1,5 @@
-use serde::{Serialize, Deserialize};
 use bud_vm::Step;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Proof {

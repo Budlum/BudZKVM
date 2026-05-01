@@ -32,5 +32,11 @@ BudZKVM artık yalnızca bağımsız CLI örnekleriyle değil, Budlum L1 `infra`
 6. [Bölüm 6: Derleyici ve Ekosistem (bud-compiler & bud-cli)](06_compiler_ve_ekosistem.md)
 7. [Bölüm 7: Prover Stabilizasyonu ve Testler](07_prover_stabilizasyonu_ve_testler.md)
 
+## Geliştirici Dokümantasyonu
+
+- [Development Workflow](development.md)
+- [Adding an Opcode](adding_opcodes.md)
+- [Proof Format Release Checklist](proof_format_release_checklist.md)
+
 ---
 > **Not:** Bu rehberdeki kod örnekleri Rust dilinde yazılmıştır. Rust'ın temel bellek güvenliği konseptlerine aşina olmak faydalı olacaktır.

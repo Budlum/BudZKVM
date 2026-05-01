@@ -24,6 +24,7 @@
             rustVersion
             pkgs.pkg-config
             pkgs.openssl
+            pkgs.python3
           ];
 
           shellHook = ''

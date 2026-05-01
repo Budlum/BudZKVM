@@ -35,8 +35,12 @@ where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
+    let has_aux_trace = generate_aux_trace.is_some();
+
     #[cfg(debug_assertions)]
-    p3_air::check_constraints(air, &trace, public_values);
+    if !has_aux_trace {
+        p3_air::check_constraints(air, &trace, public_values);
+    }
 
     // Compute the height `N = 2^n` and `log_2(height)`, `n`, of the trace.
     let degree = trace.height();
@@ -77,6 +81,8 @@ where
         preprocessed_width,
         main_width: air.width(),
         num_public_values: air.num_public_values(),
+        permutation_width: if has_aux_trace { 2 } else { 0 },
+        num_permutation_challenges: if has_aux_trace { 2 } else { 0 },
         ..Default::default()
     };
 

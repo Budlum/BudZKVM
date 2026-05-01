@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 use std::fs;
 
 pub type Hash = [u8; 32];
@@ -22,7 +22,10 @@ impl State {
         } else {
             HashMap::new()
         };
-        Self { accounts, path: path.to_string() }
+        Self {
+            accounts,
+            path: path.to_string(),
+        }
     }
 
     pub fn save(&self) {
@@ -34,13 +37,13 @@ impl State {
         let mut res = [0u8; 32];
         let mut sorted_keys: Vec<_> = self.accounts.keys().collect();
         sorted_keys.sort();
-        
+
         for key in sorted_keys {
             let acc = &self.accounts[key];
             for i in 0..8 {
                 res[i] ^= ((key >> (i * 8)) & 0xFF) as u8;
-                res[i+8] ^= ((acc.balance >> (i * 8)) & 0xFF) as u8;
-                res[i+16] ^= ((acc.nonce >> (i * 8)) & 0xFF) as u8;
+                res[i + 8] ^= ((acc.balance >> (i * 8)) & 0xFF) as u8;
+                res[i + 16] ^= ((acc.nonce >> (i * 8)) & 0xFF) as u8;
             }
         }
         res

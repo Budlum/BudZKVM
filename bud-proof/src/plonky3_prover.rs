@@ -207,15 +207,109 @@ fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
     (RowMajorMatrix::new(values, TRACE_WIDTH), num_rows)
 }
 
+fn register_term(
+    alpha: MyExtensionField,
+    beta: MyExtensionField,
+    clk: Goldilocks,
+    idx: Goldilocks,
+    val: Goldilocks,
+    is_write: Goldilocks,
+) -> MyExtensionField {
+    let beta2 = beta * beta;
+    let beta3 = beta2 * beta;
+    let beta4 = beta3 * beta;
+
+    alpha
+        + beta * MyExtensionField::from(clk)
+        + beta2 * MyExtensionField::from(idx)
+        + beta3 * MyExtensionField::from(val)
+        + beta4 * MyExtensionField::from(is_write)
+}
+
 fn aux_trace_generator(
+    main_trace: RowMajorMatrix<Goldilocks>,
     trace_len: usize,
 ) -> Box<dyn FnOnce(&[MyExtensionField]) -> RowMajorMatrix<Goldilocks>> {
     Box::new(
         move |rand: &[MyExtensionField]| -> RowMajorMatrix<Goldilocks> {
-            let _alpha = rand[0];
-            let _beta = rand[1];
-            let aux_values = vec![MyExtensionField::ONE; trace_len];
-            RowMajorMatrix::new_col(aux_values).flatten_to_base()
+            let alpha = rand[0];
+            let beta = rand[1];
+            let mut aux_values = vec![MyExtensionField::ONE; trace_len * 2];
+
+            for i in 0..trace_len.saturating_sub(1) {
+                let row_start = i * TRACE_WIDTH;
+                let is_cpu = main_trace.values[row_start + COL_IS_ADD]
+                    + main_trace.values[row_start + COL_IS_SUB]
+                    + main_trace.values[row_start + COL_IS_MUL]
+                    + main_trace.values[row_start + COL_IS_DIV]
+                    + main_trace.values[row_start + COL_IS_INV]
+                    + main_trace.values[row_start + COL_IS_AND]
+                    + main_trace.values[row_start + COL_IS_OR]
+                    + main_trace.values[row_start + COL_IS_XOR]
+                    + main_trace.values[row_start + COL_IS_NOT]
+                    + main_trace.values[row_start + COL_IS_EQ]
+                    + main_trace.values[row_start + COL_IS_NEQ]
+                    + main_trace.values[row_start + COL_IS_LT]
+                    + main_trace.values[row_start + COL_IS_GT]
+                    + main_trace.values[row_start + COL_IS_LTE]
+                    + main_trace.values[row_start + COL_IS_GTE]
+                    + main_trace.values[row_start + COL_IS_JMP]
+                    + main_trace.values[row_start + COL_IS_JNZ]
+                    + main_trace.values[row_start + COL_IS_CALL]
+                    + main_trace.values[row_start + COL_IS_RET]
+                    + main_trace.values[row_start + COL_IS_LOAD]
+                    + main_trace.values[row_start + COL_IS_STORE]
+                    + main_trace.values[row_start + COL_IS_PUSH]
+                    + main_trace.values[row_start + COL_IS_POP]
+                    + main_trace.values[row_start + COL_IS_ASSERT]
+                    + main_trace.values[row_start + COL_IS_LOG]
+                    + main_trace.values[row_start + COL_IS_SREAD]
+                    + main_trace.values[row_start + COL_IS_SWRITE]
+                    + main_trace.values[row_start + COL_IS_POSEIDON]
+                    + main_trace.values[row_start + COL_IS_SYSCALL]
+                    + main_trace.values[row_start + COL_IS_VERIFY_MERKLE]
+                    + main_trace.values[row_start + COL_IS_HALT];
+                let cpu_packet = register_term(
+                    alpha,
+                    beta,
+                    main_trace.values[row_start + COL_CLK],
+                    main_trace.values[row_start + COL_RS1_IDX],
+                    main_trace.values[row_start + COL_RS1_VAL],
+                    Goldilocks::ZERO,
+                ) * register_term(
+                    alpha,
+                    beta,
+                    main_trace.values[row_start + COL_CLK],
+                    main_trace.values[row_start + COL_RS2_IDX],
+                    main_trace.values[row_start + COL_RS2_VAL],
+                    Goldilocks::ZERO,
+                ) * register_term(
+                    alpha,
+                    beta,
+                    main_trace.values[row_start + COL_CLK],
+                    main_trace.values[row_start + COL_RD_IDX],
+                    main_trace.values[row_start + COL_RD_VAL_NEW],
+                    Goldilocks::ONE,
+                );
+                let reg_packet = register_term(
+                    alpha,
+                    beta,
+                    main_trace.values[row_start + COL_REG_CLK],
+                    main_trace.values[row_start + COL_REG_IDX],
+                    main_trace.values[row_start + COL_REG_VAL],
+                    main_trace.values[row_start + COL_REG_IS_WRITE],
+                );
+
+                let cpu_factor = MyExtensionField::from(is_cpu) * cpu_packet
+                    + MyExtensionField::from(Goldilocks::ONE - is_cpu);
+                let reg_active = main_trace.values[row_start + COL_REG_ACTIVE];
+                let reg_factor = MyExtensionField::from(reg_active) * reg_packet
+                    + MyExtensionField::from(Goldilocks::ONE - reg_active);
+                aux_values[(i + 1) * 2] = aux_values[i * 2] * cpu_factor;
+                aux_values[(i + 1) * 2 + 1] = aux_values[i * 2 + 1] * reg_factor;
+            }
+
+            RowMajorMatrix::new(aux_values, 2).flatten_to_base()
         },
     )
 }
@@ -225,11 +319,12 @@ impl ProverAdapter for Plonky3Adapter {
         let (matrix, trace_len) = trace_matrix(trace);
         let config = build_config();
         let air = BudAir { num_steps };
+        let aux_matrix = matrix.clone();
         let proof = prove(
             &config,
             &air,
             matrix,
-            Some(aux_trace_generator(trace_len)),
+            Some(aux_trace_generator(aux_matrix, trace_len)),
             &vec![],
         );
         let data = bincode::serialize(&proof).expect("failed to serialize Plonky3 proof");

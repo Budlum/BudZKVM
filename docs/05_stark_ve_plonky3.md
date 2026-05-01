@@ -68,6 +68,8 @@ Güncel akış şu şekildedir:
 6. AIR kısıtları main ve auxiliary pencereleri birlikte okuyarak değerlendirilir.
 7. Proof serialize edilerek CLI, test veya L1 entegrasyon katmanına taşınır.
 
-Bu iki fazlı yapı register, memory ve CPU tablolarını ileride cross-table lookup/permutation kurallarıyla bağlamak için gereklidir. Ana trace VM'in ne yaptığını gösterir; auxiliary trace ise farklı tabloların aynı olaya referans verdiğini kriptografik olarak bağlayacak accumulator değerlerini taşır.
+Bu iki fazlı yapı register, memory ve CPU tablolarını cross-table lookup/permutation kurallarıyla bağlamak için gereklidir. Ana trace VM'in ne yaptığını gösterir; auxiliary trace ise farklı tabloların aynı olaya referans verdiğini kriptografik olarak bağlayacak accumulator değerlerini taşır.
+
+Güncel Plonky3 yolunda auxiliary trace iki register accumulator sütunu taşır. Birinci sütun CPU satırındaki register okuma/yazma packet'lerini, ikinci sütun register event tablosundaki packet'leri biriktirir. Packet'ler Fiat-Shamir'den gelen randomness ile karıştırıldığı için prover main trace commit edildikten sonra bu yardımcı witness'ı üretir. Memory accumulator'ları ve final table-equality koşulları sonraki sertleştirme adımıdır.
 
 Bir sonraki bölümde, bu prover hattını Plonky3 0.5.2 üzerinde nasıl stabilize ettiğimizi, serde sınırlarını nasıl yönettiğimizi ve hangi testlerle kırılmaları yakaladığımızı inceleyeceğiz.

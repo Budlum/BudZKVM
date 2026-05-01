@@ -93,7 +93,7 @@ impl Instruction {
         let rs1 = ((val >> 13) & 0x1F) as u8;
         let rs2 = ((val >> 18) & 0x1F) as u8;
         let imm = ((val >> 23) & 0xFFFFFFFF) as i32;
-        
+
         Self {
             opcode,
             rd,

@@ -262,10 +262,14 @@ where
         }
     }
 
+    let has_aux_trace = commitments.aux_trace.is_some();
+    let permutation_width = if has_aux_trace { 2 } else { 0 };
     let layout = AirLayout {
         preprocessed_width,
         main_width: air.width(),
         num_public_values: air.num_public_values(),
+        permutation_width,
+        num_permutation_challenges: if has_aux_trace { 2 } else { 0 },
         ..Default::default()
     };
     let log_num_quotient_chunks =
@@ -302,8 +306,23 @@ where
     } else {
         opened_values.trace_next.is_none()
     };
+    let expected_aux_base_width = permutation_width * SC::Challenge::DIMENSION;
+    let aux_shape_ok = if has_aux_trace {
+        opened_values
+            .aux_trace_local
+            .as_ref()
+            .is_some_and(|v| v.len() == expected_aux_base_width)
+            && (!main_next
+                || opened_values
+                    .aux_trace_next
+                    .as_ref()
+                    .is_some_and(|v| v.len() == expected_aux_base_width))
+    } else {
+        opened_values.aux_trace_local.is_none() && opened_values.aux_trace_next.is_none()
+    };
     let valid_shape = opened_values.trace_local.len() == air_width
         && trace_next_ok
+        && aux_shape_ok
         && opened_values.quotient_chunks.len() == num_quotient_chunks
         && opened_values
             .quotient_chunks
@@ -327,6 +346,10 @@ where
     // values. It's not clear if failing to include other instance data could enable a transcript
     // collision, since most such changes would completely change the set of satisfying witnesses.
     challenger.observe(commitments.trace.clone());
+    if preprocessed_width > 0 {
+        challenger.observe(preprocessed_commit.as_ref().unwrap().clone());
+    }
+    challenger.observe_slice(public_values);
 
     let mut random_challenges = vec![];
     if let Some(aux_commit) = &commitments.aux_trace {
@@ -336,11 +359,6 @@ where
         random_challenges.push(rand_2);
         challenger.observe(aux_commit.clone());
     }
-
-    if preprocessed_width > 0 {
-        challenger.observe(preprocessed_commit.as_ref().unwrap().clone());
-    }
-    challenger.observe_slice(public_values);
 
     // Get the first Fiat Shamir challenge which will be used to combine all constraint polynomials
     // into a single polynomial.
