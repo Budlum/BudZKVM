@@ -54,4 +54,20 @@ builder.when_transition().assert_zero(
 ```
 İşte bir ZKVM'in hafıza bütünlüğünü koruyan, hacklenmesini ve dışarıdan veri sızdırılmasını engelleyen güvenlik duvarı tam olarak bu matematiksel formüllerdir.
 
-Bir sonraki ve son bölümde, son kullanıcının tüm bunlarla uğraşmadan kod yazmasını sağlayan **Derleyici (Compiler) ve Komut Satırı (CLI)** araçlarımızı inceleyeceğiz.
+## BudZKVM'de Güncel Prover Akışı
+
+BudZKVM'nin Plonky3 entegrasyonu tek bir dosyada bitmez. `plonky3_air.rs` kısıtları tanımlar; `plonky3_prover.rs` bu AIR'i VM trace'iyle birleştirir; `bud_stark` altındaki dosyalar ise commitment, challenge, opening ve verification akışını taşır.
+
+Güncel akış şu şekildedir:
+
+1. VM programı çalıştırır ve her cycle için bir trace satırı üretir.
+2. Adapter bu satırları `Goldilocks` field elemanlarından oluşan main trace matrisine çevirir.
+3. Main trace commit edilir ve transcript'e yazılır.
+4. Fiat-Shamir randomness üretilir.
+5. Bu randomness ile auxiliary trace üretilir.
+6. AIR kısıtları main ve auxiliary pencereleri birlikte okuyarak değerlendirilir.
+7. Proof serialize edilerek CLI, test veya L1 entegrasyon katmanına taşınır.
+
+Bu iki fazlı yapı register, memory ve CPU tablolarını ileride cross-table lookup/permutation kurallarıyla bağlamak için gereklidir. Ana trace VM'in ne yaptığını gösterir; auxiliary trace ise farklı tabloların aynı olaya referans verdiğini kriptografik olarak bağlayacak accumulator değerlerini taşır.
+
+Bir sonraki bölümde, bu prover hattını Plonky3 0.5.2 üzerinde nasıl stabilize ettiğimizi, serde sınırlarını nasıl yönettiğimizi ve hangi testlerle kırılmaları yakaladığımızı inceleyeceğiz.

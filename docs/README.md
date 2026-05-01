@@ -30,6 +30,7 @@ BudZKVM artık yalnızca bağımsız CLI örnekleriyle değil, Budlum L1 `infra`
 4. [Bölüm 4: ZK Dostu Mimari Tasarımı](04_zk_friendly_architecture.md)
 5. [Bölüm 5: STARK, AIR ve Plonky3 (bud-proof)](05_stark_ve_plonky3.md)
 6. [Bölüm 6: Derleyici ve Ekosistem (bud-compiler & bud-cli)](06_compiler_ve_ekosistem.md)
+7. [Bölüm 7: Prover Stabilizasyonu ve Testler](07_prover_stabilizasyonu_ve_testler.md)
 
 ---
 > **Not:** Bu rehberdeki kod örnekleri Rust dilinde yazılmıştır. Rust'ın temel bellek güvenliği konseptlerine aşina olmak faydalı olacaktır.

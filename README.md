@@ -1,70 +1,367 @@
-# BudZKVM: A Production-Grade ZKP-Native Virtual Machine
+# BudZKVM
 
-BudZKVM is a high-performance, verifiable virtual machine and cryptographic proving engine. It features a custom programming language (BudL), a trace-generating virtual machine (BudVM), and a production-grade STARK-based proving system using the **Plonky3** engine.
+BudZKVM is a ZK-native virtual machine, language toolchain, and STARK proving stack built around a small deterministic ISA, a trace-generating VM, and a Plonky3-based prover backend.
 
-## 📚 Crafting a ZKVM: The Book
-We have written a comprehensive, book-like guide (in Turkish) on how to build a ZKVM from scratch using BudZKVM as the reference implementation. 
-👉 [**Check out the docs/ directory**](docs/README.md) to learn about ISA design, Execution Traces, AIR constraints, and Plonky3 integration!
+The project is currently focused on stabilizing the `bud-proof` crate on Plonky3 0.5.2, restoring proof serialization, and preparing the prover architecture for a two-phase STARK flow with cross-table lookup/permutation arguments.
 
-## 🚀 Quick Start
+## What Is In This Repository?
+
+BudZKVM is organized as a Rust workspace:
+
+| Crate | Role |
+| --- | --- |
+| `bud-isa` | Instruction encoding, opcode definitions, and bytecode-level primitives. |
+| `bud-vm` | Deterministic VM execution engine that produces execution traces. |
+| `bud-compiler` | BudL compiler pipeline: lexer, parser, semantic analysis, and bytecode generation. |
+| `bud-proof` | STARK/AIR proving layer. This is where the Plonky3 prover, custom `bud_stark` flow, proof serialization, and AIR constraints live. |
+| `bud-cli` | CLI entry point for compiling, deploying, running, proving, and verifying programs. |
+| `bud-state` | File-backed state management, account state, nonce tracking, and state-root helpers. |
+| `bud-node` | Node-facing integration layer for execution and future network/RPC workflows. |
+| `docs` | Turkish book-style documentation for learning the architecture through the BudZKVM codebase. |
+
+## Current Focus
+
+The active engineering focus is the Plonky3 0.5.2 prover stabilization track:
+
+1. Keep the workspace compiling with the new Plonky3 generic configuration model.
+2. Make `bud_stark` the primary proving path used by `Plonky3Adapter`.
+3. Preserve bincode-compatible proof bytes for CLI and L1 integration.
+4. Stabilize the two-phase trace architecture: main trace first, auxiliary trace after Fiat-Shamir randomness.
+5. Prepare `folder.rs` and `sub_builder.rs` for real cross-table lookup/permutation constraints.
+6. Expand tests so every prover refactor has immediate feedback.
+
+## Book-Style Documentation
+
+The `docs/` directory contains a Turkish, book-style guide that explains BudZKVM as a reference implementation:
+
+- ISA and bytecode design.
+- VM execution and trace generation.
+- ZK-friendly architecture choices.
+- AIR constraints and Plonky3 integration.
+- Compiler, CLI, and ecosystem wiring.
+- Prover stabilization and testing flow.
+
+Start here: [`docs/README.md`](docs/README.md)
+
+## Quick Start
 
 ### Prerequisites
-- **Nix** with Flakes enabled.
 
-### Enter Development Environment
+BudZKVM uses Nix for a reproducible development environment.
+
 ```bash
 nix develop
 ```
 
-### Deploy a Contract
+### Build
+
 ```bash
-cargo run -p bud-cli -- deploy --program example.bud
+cargo check
 ```
 
-### Call a Contract (with Proof Generation & Verification)
+### Run Tests
+
 ```bash
-cargo run -p bud-cli -- call --bytecode example.bud.budc --sender 1 --args 10 --args 20
+cargo test
 ```
 
-### Direct Run & Verify
+For the prover crate only:
+
+```bash
+cargo test -p bud-proof
+```
+
+### Compile and Run a Program
+
 ```bash
 cargo run -p bud-cli -- run --program example.bud --sender 1
 ```
 
-## 🏗 Technical Architecture (Stage 2)
+### Deploy a Program
 
-- **BudL (.bud)**: A domain-specific language for ZK-computations.
-- **BudVM**: A 64-bit, 32-register VM generating high-fidelity execution traces.
-- **Bud-ISA**: A deterministic instruction set with optimal ZK-friendly encoding.
-- **STARK Engine**: 
-    - **Plonky3 Integration**: Powered by Polygon's high-performance Plonky3 prover and Goldilocks field.
-    - **Wide Trace Architecture**: Separates CPU execution from the Register Access Table for massive performance gains.
-    - **29-Column AIR**: Highly optimized Algebraic Intermediate Representation using boolean selectors and sub-clock ordering to enforce strict Read-after-Write (RaW) consistency.
-- **Persistence**: File-based state management with account nonce tracking and state-root calculation.
+```bash
+cargo run -p bud-cli -- deploy --program example.bud
+```
 
-## 🗺 Roadmap
+### Call a Deployed Program
 
-### 🏁 Milestone 1: Core Foundation (COMPLETED)
-- [x] BudL Compiler (Lexer, Parser, Sema, Codegen)
-- [x] BudVM Execution Engine with 32-register state tracking
-- [x] Persistent State Storage (`state.json`)
+```bash
+cargo run -p bud-cli -- call --bytecode example.bud.budc --sender 1 --args 10 --args 20
+```
 
-### 🚀 Milestone 2: ZK Architecture Optimization (COMPLETED)
-- [x] Migrate to Plonky3 backend for Goldilocks field performance
-- [x] Implement Register Access Table (RAT)
-- [x] Enforce Register Consistency via `COL_REG_SAME` and sub-clock ordering
-- [x] Transition from 55-column dense trace to 29-column optimized wide trace
+## Prover Architecture
 
-### 🛠 Milestone 2: VM & Language Hardening
-- [ ] **Gas Metering**: Deterministic cycle counting for DoS protection.
-- [ ] **Loops & Recursion**: Bounded loops and tail-recursive call support.
-- [ ] **Standard Library**: Native field-friendly Poseidon and Merkle modules.
-- [ ] **Advanced Types**: Structs and custom mappings in BudL.
+The proving layer is split into two levels:
 
-### 🌐 Milestone 3: Expansion & Integration
-- [ ] **Recursive Proof Aggregation**: Real recursive STARK verification in AIR.
-- [ ] **WASM Verifier**: Compiling the verifier to WASM for browser-side verification.
-- [ ] **JSON-RPC Interface**: External API for zkVM interaction.
+1. `plonky3_air.rs` defines the BudZKVM AIR: opcode selectors, PC transition rules, register constraints, halt handling, and field-level transition checks.
+2. `bud_stark/` implements the custom STARK proving and verification flow around Plonky3 primitives.
 
-## 📜 License
+Important prover files:
+
+| File | Responsibility |
+| --- | --- |
+| `bud-proof/src/plonky3_air.rs` | Main AIR constraints for BudVM execution traces. |
+| `bud-proof/src/plonky3_prover.rs` | Adapter from BudZKVM's `ProofSystem` API to the Plonky3/`bud_stark` backend. |
+| `bud-proof/src/bud_stark/config.rs` | Central Plonky3 config traits, type aliases, PCS, challenger, and domain wiring. |
+| `bud-proof/src/bud_stark/proof.rs` | Proof, commitments, opened values, and serde boundaries. |
+| `bud-proof/src/bud_stark/prover.rs` | Main prover flow: commit, challenge, quotient, open. |
+| `bud-proof/src/bud_stark/verifier.rs` | Verification flow and proof-shape validation. |
+| `bud-proof/src/bud_stark/folder.rs` | Constraint folders for prover and verifier evaluation contexts. |
+| `bud-proof/src/bud_stark/sub_builder.rs` | Sub-AIR builder utilities and window-slicing support. |
+
+## Detailed Roadmap
+
+This roadmap is intentionally detailed. BudZKVM is not just a VM, and it is not just a prover wrapper. The long-term goal is a small but complete ZK execution stack: language, bytecode, VM, trace, AIR, prover, proof transport, state integration, and node-facing execution.
+
+### Phase 0: Workspace Baseline and Development Hygiene
+
+Status: mostly complete, continuously maintained.
+
+- [x] Establish a Rust workspace with separate crates for ISA, VM, compiler, proof, CLI, state, and node integration.
+- [x] Add a Nix development environment so contributors can enter the same toolchain consistently.
+- [x] Keep `cargo check` as the minimum workspace health gate.
+- [x] Keep crate boundaries clear enough that prover changes do not require language or CLI rewrites.
+- [x] Maintain example Bud programs such as `example.bud`, `example_loop.bud`, and `test_prover.bud`.
+- [ ] Add a documented command matrix for common development workflows.
+- [ ] Add CI jobs for `cargo check`, `cargo test`, formatting, and docs link checks.
+- [ ] Add a contributor guide explaining how to add an opcode from ISA to VM to AIR to tests.
+- [ ] Add a lightweight release checklist for proof-format changes.
+
+### Phase 1: ISA and Bytecode Foundation
+
+Status: implemented, needs hardening and specification cleanup.
+
+- [x] Define a compact instruction encoding for BudVM bytecode.
+- [x] Implement deterministic opcode definitions in `bud-isa`.
+- [x] Support arithmetic instructions needed by the current VM and prover tests.
+- [x] Support control-flow instructions needed by compiled BudL programs.
+- [x] Support halt semantics at the bytecode level.
+- [ ] Write a formal opcode reference in `docs/02_isa_ve_bytecode.md`.
+- [ ] Add golden bytecode tests for every instruction encoding.
+- [ ] Add invalid-instruction tests that prove decoding failures are deterministic.
+- [ ] Add versioning metadata to bytecode artifacts.
+- [ ] Decide which opcodes are part of the stable ISA and which are experimental.
+- [ ] Add an ISA compatibility policy for future bytecode changes.
+
+### Phase 2: BudVM Execution Engine
+
+Status: functional, needs stronger execution invariants.
+
+- [x] Implement a 64-bit register-based VM with 32 registers.
+- [x] Generate execution traces during VM execution.
+- [x] Track program counter, decoded instruction fields, register reads, register writes, and halt state.
+- [x] Keep VM behavior deterministic for prover compatibility.
+- [x] Provide enough trace data for the current Plonky3 AIR.
+- [ ] Make gas/cycle accounting explicit and part of VM execution.
+- [ ] Define exact behavior for invalid memory/register/program-counter access.
+- [ ] Add tests for halt-after-halt behavior and trace padding.
+- [ ] Add tests for branch/jump edge cases.
+- [ ] Add tests for arithmetic overflow semantics.
+- [ ] Add a VM trace schema document that maps every trace column to its meaning.
+- [ ] Add trace fixtures so prover tests can compare against stable expected traces.
+
+### Phase 3: BudL Compiler and Language Surface
+
+Status: usable, needs language-hardening work.
+
+- [x] Implement lexer, parser, semantic analysis, and code generation.
+- [x] Compile BudL source into BudVM bytecode.
+- [x] Support basic program execution through `bud-cli`.
+- [x] Support loops and basic control-flow patterns used by current examples.
+- [ ] Document the BudL grammar in the docs book.
+- [ ] Add compiler snapshot tests for representative programs.
+- [ ] Add negative tests for syntax and semantic errors.
+- [ ] Improve diagnostic messages with source spans.
+- [ ] Define integer, field, boolean, and memory semantics precisely.
+- [ ] Add structs or records if they remain aligned with the ZK-friendly execution model.
+- [ ] Add a small standard library for field-friendly primitives.
+- [ ] Decide how much high-level language support should compile to VM opcodes versus builtins.
+
+### Phase 4: Plonky3 0.5.2 Prover Stabilization
+
+Status: in progress, current priority.
+
+- [x] Migrate the prover stack away from the older Plonky3 assumptions.
+- [x] Rework `StarkGenericConfig` around Plonky3 0.5.2 concepts: PCS, challenger, domain, commitment, and challenge field.
+- [x] Centralize aliases such as `Val<SC>`, `PackedVal<SC>`, `PackedChallenge<SC>`, `Com<SC>`, and `PcsProof<SC>`.
+- [x] Remove `no_std` constraints where they block practical prover implementation.
+- [x] Enable standard-library features needed by the prover, including boxed closures and parallel-friendly dependencies.
+- [x] Restore proof serialization with explicit serde bounds instead of relying on fragile inferred generic bounds.
+- [x] Replace placeholder Plonky3 calls in `Plonky3Adapter` with the new `bud_stark` proving and verification API.
+- [x] Ensure invalid proof bytes fail verification instead of panicking.
+- [x] Keep `cargo check` passing after the migration work.
+- [ ] Audit every public type alias in `bud_stark/config.rs` for long-term readability.
+- [ ] Add direct tests around proof serialization compatibility.
+- [ ] Add tests that exercise verifier failure paths for malformed openings and wrong proof shapes.
+- [ ] Decide whether proof structs need manual `Serialize`/`Deserialize` implementations for long-term stability.
+- [ ] Add a proof-format version field before treating serialized proofs as stable artifacts.
+- [ ] Document the exact Plonky3 version and backend assumptions in the README and docs.
+
+### Phase 5: AIR Constraint Coverage
+
+Status: partially implemented, must be expanded opcode by opcode.
+
+- [x] Implement the basic `BudAir` structure for evaluating VM traces.
+- [x] Use selector columns to activate opcode-specific constraints.
+- [x] Check core PC transition behavior.
+- [x] Check basic arithmetic behavior in prover tests.
+- [x] Exercise `ADD`, `SUB`, `MUL`, immediate loading, and halt flows in tests.
+- [ ] Audit every opcode in `bud-isa` against `plonky3_air.rs`.
+- [ ] Add one prover test per opcode or opcode family.
+- [ ] Add negative tests where a tampered trace must fail constraints.
+- [ ] Strengthen boolean constraints for selector columns.
+- [ ] Prove selector exclusivity: exactly one instruction shape should be active per valid row.
+- [ ] Strengthen `COL_IS_HALT` so program termination cannot be forged or weakened by padded rows.
+- [ ] Verify bitwise constraints with boolean decomposition rather than native integer intuition.
+- [ ] Add range-check strategy for values that are interpreted as small integers.
+- [ ] Add public input binding for program identity and final state commitments.
+
+### Phase 6: Two-Phase Trace and Cross-Table Lookup
+
+Status: scaffolded, next major prover milestone.
+
+- [x] Introduce a two-phase proving flow: main trace first, Fiat-Shamir randomness second, auxiliary trace third.
+- [x] Add auxiliary trace plumbing to the prover API.
+- [x] Make `PermutationAirBuilder` expose auxiliary windows instead of empty placeholders.
+- [x] Update `SubAirBuilder` and sliced builders to forward the relevant builder capabilities.
+- [x] Recompose verifier-side auxiliary opening values into challenge field elements.
+- [ ] Replace the current placeholder auxiliary trace with real accumulator columns.
+- [ ] Define the register event table shape explicitly.
+- [ ] Define the memory event table shape explicitly.
+- [ ] Implement CPU-to-register cross-table lookup.
+- [ ] Implement CPU-to-memory cross-table lookup.
+- [ ] Add permutation argument constraints for read-after-write consistency.
+- [ ] Add tests where swapped or missing register events fail verification.
+- [ ] Add tests where memory read/write order violations fail verification.
+- [ ] Decide whether lookup grand products live in one shared auxiliary table or per-table auxiliary segments.
+- [ ] Document the randomness challenge layout used by the auxiliary trace generator.
+
+### Phase 7: Proof API, Transport, and Compatibility
+
+Status: functional but not yet final.
+
+- [x] Keep `bud-proof::Proof` as the simple byte-carrying type exposed to the rest of the workspace.
+- [x] Serialize internal `bud_stark::Proof<MyConfig>` through bincode in the Plonky3 adapter.
+- [x] Deserialize proof bytes during verification.
+- [x] Return `false` on invalid proof bytes.
+- [ ] Add an explicit proof envelope with version, backend, field, and circuit identifiers.
+- [ ] Add tests that old proof versions fail with clear errors once versioning exists.
+- [ ] Decide whether bincode remains the long-term transport or only the local development transport.
+- [ ] Add optional JSON metadata for CLI inspection without exposing the full proof internals.
+- [ ] Add deterministic proof fixture tests when randomness and transcript behavior are stable enough.
+- [ ] Add proof size tracking benchmarks.
+- [ ] Add verifier-only APIs for node and browser integration.
+
+### Phase 8: CLI and Developer Experience
+
+Status: usable, needs polish and stronger UX.
+
+- [x] Provide CLI flows for running, deploying, and calling Bud programs.
+- [x] Connect CLI calls to proof generation and verification.
+- [x] Support file-backed state in local workflows.
+- [ ] Add `bud-cli prove` and `bud-cli verify` as explicit commands if they are not already first-class.
+- [ ] Add command output modes: human-readable, JSON, and quiet.
+- [ ] Add better error messages for compile, VM, proof, and state failures.
+- [ ] Add examples for deploying, calling, and verifying in the README.
+- [ ] Add integration tests that run CLI commands against example programs.
+- [ ] Add a `--trace` or `--dump-trace` mode for debugging AIR failures.
+- [ ] Add a `--proof-out` and `--proof-in` workflow for saving and verifying proofs across commands.
+- [ ] Add state reset and state inspect commands for local development.
+
+### Phase 9: State, Accounts, and L1 Integration
+
+Status: partly wired, needs protocol-level clarity.
+
+- [x] Maintain file-backed state for local execution.
+- [x] Track account-like state and nonce-related behavior.
+- [x] Support BudZKVM as an execution backend concept for contract-call style flows.
+- [ ] Specify exactly which state fields are committed into public inputs.
+- [ ] Bind initial state root and final state root into the proof.
+- [ ] Bind sender, arguments, bytecode hash, gas limit, and execution result into the proof.
+- [ ] Add replay-protection tests around nonce behavior.
+- [ ] Add state transition tests where invalid final state must fail verification.
+- [ ] Add L1-facing proof verification API boundaries.
+- [ ] Add documentation for how BudZKVM execution maps to a transaction lifecycle.
+- [ ] Define how proof failures are surfaced to the node layer.
+
+### Phase 10: Performance and Benchmarking
+
+Status: early.
+
+- [ ] Add benchmark harnesses for VM execution, trace generation, proof generation, and verification.
+- [ ] Track proof size over representative programs.
+- [ ] Track prover time over increasing trace lengths.
+- [ ] Track verifier time separately from prover time.
+- [ ] Measure auxiliary trace overhead once real lookup accumulators are implemented.
+- [ ] Compare dense trace versus split-table trace performance.
+- [ ] Add flamegraph-friendly benchmark commands.
+- [ ] Evaluate Rayon parallelism and make thread-count behavior configurable.
+- [ ] Add performance notes to docs so optimization decisions are preserved.
+
+### Phase 11: Security and Soundness Review
+
+Status: pending deeper prover completion.
+
+- [ ] Review every AIR constraint for missing selector, transition, and boundary conditions.
+- [ ] Review halt constraints and trace padding assumptions.
+- [ ] Review public input binding so proofs cannot be replayed for different programs or states.
+- [ ] Review Fiat-Shamir transcript ordering.
+- [ ] Review challenge sampling and auxiliary trace dependency rules.
+- [ ] Review proof deserialization for denial-of-service or malformed-input issues.
+- [ ] Add property-style tests for VM determinism.
+- [ ] Add tampered-trace tests for every major constraint family.
+- [ ] Add a security notes document listing known assumptions and non-goals.
+- [ ] Prepare an external audit checklist once lookup/permutation constraints are complete.
+
+### Phase 12: Documentation and Learning Material
+
+Status: active.
+
+- [x] Maintain a Turkish book-style documentation track in `docs/`.
+- [x] Add a prover stabilization chapter connected to the actual Plonky3 migration work.
+- [x] Update the STARK/Plonky3 chapter with the current two-phase prover flow.
+- [ ] Add diagrams for the VM-to-trace-to-AIR-to-proof pipeline.
+- [ ] Add a full opcode-to-constraint walkthrough.
+- [ ] Add a chapter explaining proof serialization and verifier responsibilities.
+- [ ] Add a chapter explaining cross-table lookup from first principles using BudZKVM tables.
+- [ ] Add debugging guides for common prover errors.
+- [ ] Add a "how to add a new opcode" guide that touches every crate.
+- [ ] Keep documentation examples synchronized with executable tests.
+
+### Phase 13: Future Expansion
+
+Status: design stage.
+
+- [ ] Add recursive proof aggregation once the base proof system is stable.
+- [ ] Add a WASM verifier target for browser or light-client verification.
+- [ ] Add JSON-RPC or node-facing APIs for external systems.
+- [ ] Add richer BudL standard library primitives such as hash, Merkle, and field utilities.
+- [ ] Add proof aggregation for batched contract calls.
+- [ ] Add multi-program proof composition if the execution model requires it.
+- [ ] Explore alternative PCS/backends only after the Plonky3 0.5.2 path is stable.
+
+## Near-Term Execution Plan
+
+The next concrete development sequence is:
+
+1. Finish Phase 4 cleanup around Plonky3 config aliases, serde boundaries, and proof compatibility.
+2. Continue Phase 5 by auditing `plonky3_air.rs` opcode by opcode.
+3. Move Phase 6 from scaffold to implementation by replacing the placeholder auxiliary trace with real register permutation accumulators.
+4. Add negative prover tests that intentionally violate register consistency, halt behavior, and proof shape.
+5. Bind program identity and state commitments into public inputs.
+6. Expand documentation in parallel so each prover milestone has a matching explanation in `docs/`.
+
+## Verification Status
+
+The current stabilization baseline is expected to pass:
+
+```bash
+cargo check
+cargo test -p bud-proof
+```
+
+The prover test suite currently covers successful proof generation/verification for simple arithmetic traces, immediate loading, proof byte round-trips, and invalid proof byte rejection.
+
+## License
+
 Apache-2.0
