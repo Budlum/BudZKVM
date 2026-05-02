@@ -153,23 +153,21 @@ impl Vm {
             Opcode::Load => {
                 let result = if src1_idx == 0 {
                     inst.imm as u64
+                } else if let Some(addr) =
+                    Self::memory_word_addr(src1_val, inst.imm, self.memory.len())
+                {
+                    let mut bytes = [0u8; 8];
+                    bytes.copy_from_slice(&self.memory[addr..addr + 8]);
+                    u64::from_le_bytes(bytes)
                 } else {
-                    let addr = (src1_val as i64 + inst.imm as i64) as usize;
-                    if addr + 8 <= self.memory.len() {
-                        let mut bytes = [0u8; 8];
-                        bytes.copy_from_slice(&self.memory[addr..addr + 8]);
-                        u64::from_le_bytes(bytes)
-                    } else {
-                        0
-                    }
+                    0
                 };
                 self.registers[dst_idx as usize] = result;
                 self.pc += 1;
                 (result, cur_pc + 1)
             }
             Opcode::Store => {
-                let addr = (src1_val as i64 + inst.imm as i64) as usize;
-                if addr + 8 <= self.memory.len() {
+                if let Some(addr) = Self::memory_word_addr(src1_val, inst.imm, self.memory.len()) {
                     let bytes = src2_val.to_le_bytes();
                     self.memory[addr..addr + 8].copy_from_slice(&bytes);
                 }
@@ -305,7 +303,11 @@ impl Vm {
             Opcode::VerifyMerkle => {
                 let root = src1_val;
                 let leaf = src2_val;
-                let path = self.registers[inst.imm as usize];
+                let path = usize::try_from(inst.imm)
+                    .ok()
+                    .and_then(|idx| self.registers.get(idx))
+                    .copied()
+                    .unwrap_or(0);
                 let computed = leaf
                     .wrapping_mul(31)
                     .wrapping_add(path)
@@ -335,6 +337,17 @@ impl Vm {
         while !self.halted {
             self.step(program);
         }
+    }
+
+    fn memory_word_addr(base: u64, imm: i32, memory_len: usize) -> Option<usize> {
+        let addr = i128::from(base) + i128::from(imm);
+        if addr < 0 {
+            return None;
+        }
+
+        let addr = usize::try_from(addr).ok()?;
+        let end = addr.checked_add(8)?;
+        (end <= memory_len).then_some(addr)
     }
 
     fn gas_cost(opcode: Opcode) -> u64 {
@@ -404,5 +417,150 @@ mod tests {
         let mut vm = Vm::with_gas_limit(64, 3);
 
         vm.run(&program);
+    }
+
+    #[test]
+    fn gas_accounting_matches_instruction_costs() {
+        let program = vec![
+            inst(Opcode::Load, 1, 0, 0, 9),
+            inst(Opcode::Push, 0, 1, 0, 0),
+            inst(Opcode::Syscall, 2, 0, 0, 1),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+
+        let mut vm = Vm::new(64);
+        vm.context.sender = 77;
+        vm.run(&program);
+
+        assert_eq!(vm.gas_used, 10);
+        assert_eq!(vm.registers[1], 9);
+        assert_eq!(vm.registers[2], 77);
+        assert_eq!(vm.trace.len(), 4);
+    }
+
+    #[test]
+    fn step_after_halt_is_idempotent() {
+        let program = vec![
+            inst(Opcode::Halt, 0, 0, 0, 0),
+            inst(Opcode::Load, 1, 0, 0, 99),
+        ];
+
+        let mut vm = Vm::new(64);
+        vm.step(&program);
+
+        assert!(vm.halted);
+        assert_eq!(vm.pc, 0);
+        assert_eq!(vm.trace.len(), 1);
+
+        vm.step(&program);
+
+        assert!(vm.halted);
+        assert_eq!(vm.pc, 0);
+        assert_eq!(vm.trace.len(), 1);
+        assert_eq!(vm.registers[1], 0);
+    }
+
+    #[test]
+    fn pc_outside_program_halts_without_trace_row() {
+        let program = vec![inst(Opcode::Halt, 0, 0, 0, 0)];
+        let mut vm = Vm::new(64);
+        vm.pc = program.len();
+
+        vm.step(&program);
+
+        assert!(vm.halted);
+        assert_eq!(vm.trace.len(), 0);
+    }
+
+    #[test]
+    fn invalid_memory_accesses_are_zero_or_noop() {
+        let load_out_of_bounds = inst(Opcode::Load, 1, 2, 0, 5);
+        let load_negative = inst(Opcode::Load, 3, 2, 0, -1);
+        let store_out_of_bounds = inst(Opcode::Store, 0, 2, 4, 5);
+        let store_negative = inst(Opcode::Store, 0, 2, 4, -1);
+        let program = vec![
+            load_out_of_bounds,
+            load_negative,
+            store_out_of_bounds,
+            store_negative,
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+
+        let mut vm = Vm::new(8);
+        vm.registers[2] = 0;
+        vm.registers[4] = 0xAABB_CCDD_EEFF_0011;
+        vm.run(&program);
+
+        assert_eq!(vm.registers[1], 0);
+        assert_eq!(vm.registers[3], 0);
+        assert_eq!(vm.memory, vec![0; 8]);
+    }
+
+    #[test]
+    fn verify_merkle_with_invalid_path_register_returns_false() {
+        let program = vec![
+            inst(Opcode::VerifyMerkle, 3, 1, 2, 99),
+            inst(Opcode::VerifyMerkle, 4, 1, 2, -1),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+
+        let mut vm = Vm::new(64);
+        vm.registers[1] = 123;
+        vm.registers[2] = 5;
+        vm.run(&program);
+
+        assert_eq!(vm.registers[3], 0);
+        assert_eq!(vm.registers[4], 0);
+        assert_eq!(vm.trace.len(), 3);
+    }
+
+    #[test]
+    fn branch_and_jump_edge_cases_are_deterministic() {
+        let program = vec![
+            inst(Opcode::Jnz, 0, 1, 0, 3),
+            inst(Opcode::Load, 2, 0, 0, 11),
+            inst(Opcode::Jmp, 0, 0, 0, 3),
+            inst(Opcode::Load, 2, 0, 0, 22),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+
+        let mut vm = Vm::new(64);
+        vm.run(&program);
+
+        assert_eq!(vm.registers[2], 11);
+        assert!(vm.halted);
+        assert_eq!(vm.pc, 5);
+        assert_eq!(vm.trace.len(), 3);
+        assert_eq!(vm.trace[0].next_pc, 1);
+        assert_eq!(vm.trace[2].next_pc, 5);
+
+        let mut taken = Vm::new(64);
+        taken.registers[1] = 1;
+        taken.run(&program);
+
+        assert_eq!(taken.registers[2], 22);
+        assert!(taken.halted);
+        assert_eq!(taken.pc, 4);
+        assert_eq!(taken.trace.len(), 3);
+        assert_eq!(taken.trace[0].next_pc, 3);
+    }
+
+    #[test]
+    fn arithmetic_overflow_wraps_modulo_u64() {
+        let program = vec![
+            inst(Opcode::Add, 3, 1, 2, 0),
+            inst(Opcode::Sub, 4, 0, 2, 0),
+            inst(Opcode::Mul, 5, 1, 2, 0),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+
+        let mut vm = Vm::new(64);
+        vm.registers[1] = u64::MAX;
+        vm.registers[2] = 2;
+        vm.run(&program);
+
+        assert_eq!(vm.registers[3], 1);
+        assert_eq!(vm.registers[4], u64::MAX - 1);
+        assert_eq!(vm.registers[5], u64::MAX - 1);
     }
 }

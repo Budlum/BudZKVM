@@ -141,36 +141,36 @@ Status: mostly complete, continuously maintained.
 
 ### Phase 1: ISA and Bytecode Foundation
 
-Status: implemented, needs hardening and specification cleanup.
+Status: completed.
 
 - [x] Define a compact instruction encoding for BudVM bytecode.
 - [x] Implement deterministic opcode definitions in `bud-isa`.
 - [x] Support arithmetic instructions needed by the current VM and prover tests.
 - [x] Support control-flow instructions needed by compiled BudL programs.
 - [x] Support halt semantics at the bytecode level.
-- [ ] Write a formal opcode reference in `docs/02_isa_ve_bytecode.md`.
-- [ ] Add golden bytecode tests for every instruction encoding.
-- [ ] Add invalid-instruction tests that prove decoding failures are deterministic.
-- [ ] Add versioning metadata to bytecode artifacts.
-- [ ] Decide which opcodes are part of the stable ISA and which are experimental.
-- [ ] Add an ISA compatibility policy for future bytecode changes.
+- [x] Write a formal opcode reference in `docs/02_isa_ve_bytecode.md`.
+- [x] Add golden bytecode tests for every instruction encoding.
+- [x] Add invalid-instruction tests that prove decoding failures are deterministic.
+- [x] Add versioning metadata to bytecode artifacts.
+- [x] Decide which opcodes are part of the stable ISA and which are experimental.
+- [x] Add an ISA compatibility policy for future bytecode changes.
 
 ### Phase 2: BudVM Execution Engine
 
-Status: functional, needs stronger execution invariants.
+Status: completed.
 
 - [x] Implement a 64-bit register-based VM with 32 registers.
 - [x] Generate execution traces during VM execution.
 - [x] Track program counter, decoded instruction fields, register reads, register writes, and halt state.
 - [x] Keep VM behavior deterministic for prover compatibility.
 - [x] Provide enough trace data for the current Plonky3 AIR.
-- [ ] Make gas/cycle accounting explicit and part of VM execution.
-- [ ] Define exact behavior for invalid memory/register/program-counter access.
-- [ ] Add tests for halt-after-halt behavior and trace padding.
-- [ ] Add tests for branch/jump edge cases.
-- [ ] Add tests for arithmetic overflow semantics.
-- [ ] Add a VM trace schema document that maps every trace column to its meaning.
-- [ ] Add trace fixtures so prover tests can compare against stable expected traces.
+- [x] Make gas/cycle accounting explicit and part of VM execution.
+- [x] Define exact behavior for invalid memory/register/program-counter access.
+- [x] Add tests for halt-after-halt behavior and trace padding.
+- [x] Add tests for branch/jump edge cases.
+- [x] Add tests for arithmetic overflow semantics.
+- [x] Add a VM trace schema document that maps every trace column to its meaning.
+- [x] Add trace fixtures so prover tests can compare against stable expected traces.
 
 ### Phase 3: BudL Compiler and Language Surface
 

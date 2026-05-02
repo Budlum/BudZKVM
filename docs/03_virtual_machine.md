@@ -22,10 +22,15 @@ Bir işlemcinin klasik döngüsüdür:
 2. **Decode (Çöz):** Komutun içindeki Opcode, src1, src2, dst ve imm değerlerini ayrıştır.
 3. **Execute (Çalıştır):** Opcode'un gerektirdiği işlemi yap, sonucu `dst` register'ına yaz ve `PC`'yi bir sonraki komuta geçir.
 
-`bud-vm/src/lib.rs` içindeki `step(program)` fonksiyonu tam olarak bunu yapar:
+`bud-vm/src/lib.rs` içindeki `step(program)` fonksiyonu tam olarak bunu yapar. Güncel VM'de ilk kural şudur: Eğer VM zaten halt olmuşsa veya `pc` program dışına çıkmışsa yeni trace satırı üretilmez.
 
 ```rust
 pub fn step(&mut self, program: &[u64]) {
+    if self.halted || self.pc >= program.len() {
+        self.halted = true;
+        return;
+    }
+
     // 1. Fetch
     let raw_inst = program[self.pc];
     let inst = Instruction::decode(raw_inst);
@@ -75,10 +80,13 @@ pub fn step(&mut self, program: &[u64]) {
         src2_val,
         dst_val,
         next_pc,
+        registers: self.registers,
     });
 
 }
 ```
+
+Bu küçük guard, prover açısından çok önemlidir. Program dışına çıkan bir branch ya da jump için sahte bir instruction satırı üretmeyiz; VM deterministik olarak halt eder. Böylece trace uzunluğu ve trace içeriği aynı bytecode için her zaman aynıdır.
 
 ## Gas Metering
 
@@ -93,6 +101,64 @@ Gas maliyetleri bilinçli olarak basit tutulmuştur:
 * `Poseidon` ve `VerifyMerkle` `10` gas.
 
 Limit aşılırsa VM `Out of gas` hatasıyla durur. Budlum L1 entegrasyonunda bu hata transaction failure'a çevrilir ve sender state'i atomik olarak değişmeden kalır.
+
+Phase 2 kapsamında gas davranışı testlerle sabitlendi. `Load + Push + Syscall + Halt` gibi küçük programlarda `gas_used` tam beklenen toplam maliyeti verir. Sonsuz döngü örneği olan `Jmp 0` ise limit aşıldığında `Out of gas` ile kesilir.
+
+## Deterministik Hata ve Kenar Durumu Semantiği
+
+Bir ZKVM'de "panic attı mı atmadı mı?" gibi davranışların rastlantısal veya Rust build moduna bağlı olması tehlikelidir. Bu yüzden BudVM'de bazı kenar durumlarını açıkça tanımlıyoruz.
+
+### Program Dışı PC
+
+Eğer `pc >= program.len()` ise:
+
+* `halted = true` olur.
+* Yeni `Step` satırı eklenmez.
+* Register ve memory değişmez.
+
+Bu durum özellikle program dışına sıçrayan `Jmp` ve `Jnz` instruction'ları için önemlidir. Kontrol akışı bir sonraki `step` çağrısında deterministik olarak biter.
+
+### Halt Sonrası Step
+
+`Halt` instruction'ı execute edildikten sonra:
+
+* `pc` aynı kalır.
+* Trace'e `Halt` satırı bir kez eklenir.
+* Sonraki `step` çağrıları trace'e yeni satır eklemez.
+* Register ve memory değişmez.
+
+Bu davranış prover tarafındaki `COL_IS_HALT` kısıtlarını güçlendirmek için temel kabulümüzdür.
+
+### Memory Erişimi
+
+`Load` iki modda çalışır:
+
+* `rs1 == 0` ise `imm` immediate değer olarak `rd` register'ına yazılır.
+* `rs1 != 0` ise `register[rs1] + imm` adresinden 8 byte little-endian word okunur.
+
+Geçersiz memory okuması `0` döndürür. Geçersiz memory yazması no-op olur. Geçersiz kabul edilen durumlar:
+
+* Negatif adres.
+* `usize` içine sığmayan adres.
+* `addr + 8` taşması.
+* `addr + 8 > memory.len()`.
+
+Bu davranış `Load` ve `Store` için `memory_word_addr` yardımcı fonksiyonu ile merkezileştirilmiştir.
+
+### Register Erişimi
+
+Normal `rd`, `rs1` ve `rs2` alanları ISA decode sırasında 5 bit ile maskelenir; bu yüzden `0..32` aralığındadır. Ancak `VerifyMerkle`, path register'ını `imm` üzerinden seçer. `imm` negatifse veya register aralığı dışındaysa path değeri `0` kabul edilir. Bu sayede kötü bytecode doğrudan index panic üretmez.
+
+### Aritmetik Overflow
+
+BudVM aritmetiği `u64` üzerinde wrapping semantiğe sahiptir:
+
+* `Add`: `wrapping_add`
+* `Sub`: `wrapping_sub`
+* `Mul`: `wrapping_mul`
+* `Poseidon` placeholder hesabı: wrapping çarpma/toplama
+
+Bu karar debug ve release build farkını ortadan kaldırır. AIR tarafı da bu semantiği hedeflemelidir.
 
 ## Call Stack ve Stack Opcodes
 
@@ -110,6 +176,27 @@ Stack underflow durumları panic ile yakalanır. Bu davranış, proof/backend ka
 Klasik bir VM'de `step` işlemini yapıp eski state'i unuturuz. Fakat ZK dünyasında Prover, **her bir clock cycle'da (saat vuruşunda) ne olduğunu bilmek zorundadır.** Prover'ın işi, *"VM gerçekten bu adımları doğru hesapladı mı?"* sorusunu bir STARK devresi üzerinden kanıtlamaktır.
 
 Bu yüzden VM çalışırken her bir `Step` objesini bir listeye ekleriz. Buna **Execution Trace** denir. Bu liste daha sonra ZK Prover'a gönderilecek ve satır satır, sütun sütun devasa bir matrise (matrix) dönüştürülecektir.
+
+`Step` satırları artık sadece "hangi opcode çalıştı?" bilgisini taşımaz. Her satırda:
+
+* `pc` ve `next_pc`
+* decode edilmiş instruction
+* `src1_idx`, `src2_idx`, `dst_idx`
+* execute öncesi `src1_val`, `src2_val`
+* instruction sonucu `dst_val`
+* execute sonrası 32 register'lık snapshot
+
+bulunur. Ayrıntılı trace sözleşmesi için [BudVM Trace Schema](vm_trace_schema.md) dokümanına bakın.
+
+## Trace Fixture Testleri
+
+Phase 2'de VM trace davranışını fixture testleriyle sabitledik. Bu testler `bud-vm/tests/trace_fixtures.rs` içinde durur ve üç ana akışı kapsar:
+
+1. Aritmetik: `Load`, `Add`, `Sub`, `Mul`, `Halt`.
+2. Kontrol akışı: `Jnz`, `Jmp`, program dışına çıkınca deterministik halt.
+3. Memory/storage/event: `Store`, memory `Load`, `SWrite`, `SRead`, `Log`.
+
+Bu testler sadece final register sonucunu kontrol etmez. Her `Step` satırında `pc`, `next_pc`, opcode, operand değerleri ve seçilmiş register snapshot'ları karşılaştırılır. Böylece VM refactor edildiğinde prover'ın beslendiği trace formatı sessizce değişmez.
 
 ## Storage ve State Root
 

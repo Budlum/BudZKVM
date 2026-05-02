@@ -27,6 +27,7 @@ BudZKVM artık yalnızca bağımsız CLI örnekleriyle değil, Budlum L1 `infra`
 1. [Bölüm 1: Giriş - ZKVM Nedir ve Neden Kendi ZKVM'imizi Yapıyoruz?](01_giris.md)
 2. [Bölüm 2: Komut Seti Mimarisi ve Bytecode (bud-isa)](02_isa_ve_bytecode.md)
 3. [Bölüm 3: Sanal Makine İnşası (bud-vm)](03_virtual_machine.md)
+   - [BudVM Trace Schema](vm_trace_schema.md)
 4. [Bölüm 4: ZK Dostu Mimari Tasarımı](04_zk_friendly_architecture.md)
 5. [Bölüm 5: STARK, AIR ve Plonky3 (bud-proof)](05_stark_ve_plonky3.md)
 6. [Bölüm 6: Derleyici ve Ekosistem (bud-compiler & bud-cli)](06_compiler_ve_ekosistem.md)
