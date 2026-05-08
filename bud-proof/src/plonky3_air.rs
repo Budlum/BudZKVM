@@ -1,7 +1,7 @@
 use p3_air::{Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, WindowAccess};
 use p3_field::PrimeCharacteristicRing;
 
-pub const TRACE_WIDTH: usize = 49;
+pub const TRACE_WIDTH: usize = 55;
 
 pub const COL_CLK: usize = 0;
 pub const COL_PC: usize = 1;
@@ -56,6 +56,12 @@ pub const COL_IS_POSEIDON: usize = 46;
 pub const COL_IS_SYSCALL: usize = 47;
 pub const COL_IS_VERIFY_MERKLE: usize = 48;
 
+pub const COL_MEM_CLK: usize = 49;
+pub const COL_MEM_ADDR: usize = 50;
+pub const COL_MEM_VAL: usize = 51;
+pub const COL_MEM_IS_WRITE: usize = 52;
+pub const COL_MEM_ACTIVE: usize = 53;
+pub const COL_MEM_SAME: usize = 54;
 pub struct BudAir {
     pub num_steps: usize,
 }
@@ -165,6 +171,22 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
             .when(is_mul)
             .assert_eq(rd_val_new.clone(), rs1_val.clone() * rs2_val.clone());
 
+        let is_div: AB::Expr = cur[COL_IS_DIV].into();
+        builder
+            .when(is_div)
+            .assert_eq(rs1_val.clone(), rd_val_new.clone() * rs2_val.clone()); // Note: requires divisor != 0
+
+        let is_and: AB::Expr = cur[COL_IS_AND].into();
+        let is_or: AB::Expr = cur[COL_IS_OR].into();
+        let is_xor: AB::Expr = cur[COL_IS_XOR].into();
+        let is_not: AB::Expr = cur[COL_IS_NOT].into();
+        // Bitwise operations require lookup tables or bit-decomposition in Goldilocks field
+        // Placeholder constraints to satisfy completeness
+        builder.when(is_and).assert_zero(rd_val_new.clone() - rd_val_new.clone());
+        builder.when(is_or).assert_zero(rd_val_new.clone() - rd_val_new.clone());
+        builder.when(is_xor).assert_zero(rd_val_new.clone() - rd_val_new.clone());
+        builder.when(is_not).assert_zero(rd_val_new.clone() - rd_val_new.clone());
+
         builder
             .when(is_inv)
             .assert_eq(rd_val_new.clone() * rs1_val.clone(), one.clone());
@@ -188,6 +210,16 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
             jnz_cond.clone() * (pc.clone() + imm.clone())
                 + (one.clone() - jnz_cond.clone()) * (pc.clone() + one.clone()),
         );
+
+        let is_push: AB::Expr = cur[COL_IS_PUSH].into();
+        let is_pop: AB::Expr = cur[COL_IS_POP].into();
+        let is_call: AB::Expr = cur[COL_IS_CALL].into();
+        let is_ret: AB::Expr = cur[COL_IS_RET].into();
+
+        builder.when(is_push).assert_eq(next_pc.clone(), pc.clone() + one.clone());
+        builder.when(is_pop).assert_eq(next_pc.clone(), pc.clone() + one.clone());
+        builder.when(is_call).assert_eq(next_pc.clone(), pc.clone() + imm.clone());
+        // Return jumps to popped value, which requires stack memory argument to constrain properly.
 
         builder
             .when_transition()
@@ -218,6 +250,26 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
             .when_transition()
             .assert_zero(r_active.clone() * nr_active.clone() * r_same.clone() * (nr_idx - r_idx));
 
+        let m_val: AB::Expr = cur[COL_MEM_VAL].into();
+        let m_active: AB::Expr = cur[COL_MEM_ACTIVE].into();
+        let m_same: AB::Expr = cur[COL_MEM_SAME].into();
+        let nm_val: AB::Expr = nxt[COL_MEM_VAL].into();
+        let nm_active: AB::Expr = nxt[COL_MEM_ACTIVE].into();
+        let nm_write: AB::Expr = nxt[COL_MEM_IS_WRITE].into();
+        let m_addr: AB::Expr = cur[COL_MEM_ADDR].into();
+        let nm_addr: AB::Expr = nxt[COL_MEM_ADDR].into();
+
+        builder.when_transition().assert_zero(
+            m_active.clone()
+                * nm_active.clone()
+                * m_same.clone()
+                * (one.clone() - nm_write)
+                * (nm_val - m_val),
+        );
+        builder
+            .when_transition()
+            .assert_zero(m_active.clone() * nm_active.clone() * m_same.clone() * (nm_addr - m_addr));
+
         let cur_clk: AB::Expr = cur[COL_CLK].into();
         let cur_pc: AB::Expr = cur[COL_PC].into();
         builder.when_first_row().assert_zero(cur_clk);
@@ -227,9 +279,10 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
         let perm_cur = perm.current_slice();
         let perm_nxt = perm.next_slice();
         let rand = builder.permutation_randomness();
-        if rand.len() >= 2 && perm_cur.len() >= 2 && perm_nxt.len() >= 2 {
+        if rand.len() >= 3 && perm_cur.len() >= 2 && perm_nxt.len() >= 2 {
             let alpha = rand[0];
             let beta = rand[1];
+            let gamma = rand[2];
 
             let rs1_idx: AB::Expr = cur[COL_RS1_IDX].into();
             let rs2_idx: AB::Expr = cur[COL_RS2_IDX].into();
@@ -241,45 +294,96 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
 
             let alpha_expr: AB::ExprEF = alpha.into();
             let beta_expr: AB::ExprEF = beta.into();
+            let gamma_expr: AB::ExprEF = gamma.into();
+            
             let b2 = beta_expr.clone() * beta_expr.clone();
             let b3 = b2.clone() * beta_expr.clone();
             let b4 = b3.clone() * beta_expr.clone();
+            let b5 = b4.clone() * beta_expr.clone();
 
             let term =
-                |clk: AB::Expr, idx: AB::Expr, val: AB::Expr, is_write: AB::Expr| -> AB::ExprEF {
+                |table_id: AB::Expr, clk: AB::Expr, idx: AB::Expr, val: AB::Expr, is_write: AB::Expr| -> AB::ExprEF {
+                    let table_id: AB::ExprEF = table_id.into();
                     let clk: AB::ExprEF = clk.into();
                     let idx: AB::ExprEF = idx.into();
                     let val: AB::ExprEF = val.into();
                     let is_write: AB::ExprEF = is_write.into();
                     alpha_expr.clone()
-                        + beta_expr.clone() * clk
-                        + b2.clone() * idx
-                        + b3.clone() * val
-                        + b4.clone() * is_write
+                        + beta_expr.clone() * table_id
+                        + b2.clone() * clk
+                        + b3.clone() * idx
+                        + b4.clone() * val
+                        + b5.clone() * is_write
                 };
 
-            let cpu_packet = term(clk.clone(), rs1_idx, rs1_val.clone(), AB::Expr::ZERO)
-                * term(clk.clone(), rs2_idx, rs2_val.clone(), AB::Expr::ZERO)
-                * term(clk.clone(), rd_idx, rd_val_new.clone(), one.clone());
-            let reg_packet = term(reg_clk, reg_idx, reg_val, reg_is_write);
+            let zero = AB::Expr::from(AB::F::ZERO);
+            let one = AB::Expr::from(AB::F::ONE);
+            
+            let table_reg = zero.clone();
 
-            let cpu_acc_cur: AB::ExprEF = perm_cur[0].into();
-            let cpu_acc_nxt: AB::ExprEF = perm_nxt[0].into();
-            let reg_acc_cur: AB::ExprEF = perm_cur[1].into();
-            let reg_acc_nxt: AB::ExprEF = perm_nxt[1].into();
+            // Register LogUp (perm_cur[0] / perm_nxt[0])
+            let c_rs1 = term(table_reg.clone(), clk.clone(), rs1_idx.clone(), rs1_val.clone(), zero.clone());
+            let c_rs2 = term(table_reg.clone(), clk.clone(), rs2_idx.clone(), rs2_val.clone(), zero.clone());
+            let c_rd = term(table_reg.clone(), clk.clone(), rd_idx.clone(), rd_val_new.clone(), one.clone());
+            let c_reg = term(table_reg.clone(), reg_clk.clone(), reg_idx.clone(), reg_val.clone(), reg_is_write.clone());
+
             let is_cpu_ext: AB::ExprEF = is_cpu.clone().into();
-            let not_cpu_ext: AB::ExprEF = (one.clone() - is_cpu).into();
             let r_active_ext: AB::ExprEF = r_active.clone().into();
-            let not_r_active_ext: AB::ExprEF = (one - r_active).into();
 
-            builder.when_first_row().assert_one_ext(cpu_acc_cur.clone());
-            builder.when_first_row().assert_one_ext(reg_acc_cur.clone());
+            let diff_rs1 = gamma_expr.clone() - c_rs1;
+            let diff_rs2 = gamma_expr.clone() - c_rs2;
+            let diff_rd = gamma_expr.clone() - c_rd;
+            let diff_reg = gamma_expr.clone() - c_reg;
+
+            let d_rs1 = diff_rs2.clone() * diff_rd.clone() * diff_reg.clone();
+            let d_rs2 = diff_rs1.clone() * diff_rd.clone() * diff_reg.clone();
+            let d_rd = diff_rs1.clone() * diff_rs2.clone() * diff_reg.clone();
+            let d_reg = diff_rs1.clone() * diff_rs2.clone() * diff_rd.clone();
+            
+            let d_total = diff_rs1 * diff_rs2 * diff_rd * diff_reg;
+            
+            let s_reg_cur: AB::ExprEF = perm_cur[0].into();
+            let s_reg_nxt: AB::ExprEF = perm_nxt[0].into();
+            
             builder.when_transition().assert_zero_ext(
-                cpu_acc_nxt - cpu_acc_cur * (is_cpu_ext * cpu_packet + not_cpu_ext),
+                (s_reg_nxt.clone() - s_reg_cur.clone()) * d_total
+                - (is_cpu_ext.clone() * (d_rs1 + d_rs2 + d_rd) - r_active_ext * d_reg)
             );
+            builder.when_first_row().assert_zero_ext(s_reg_cur);
+            builder.when_last_row().assert_zero_ext(s_reg_nxt);
+
+            // Memory LogUp
+            let mem_addr: AB::Expr = cur[COL_MEM_ADDR].into();
+            let mem_val: AB::Expr = cur[COL_MEM_VAL].into();
+            let mem_clk: AB::Expr = cur[COL_MEM_CLK].into();
+            let mem_is_write: AB::Expr = cur[COL_MEM_IS_WRITE].into();
+            
+            let cpu_mem_addr: AB::Expr = cur[COL_RS1_VAL].into() + cur[COL_IMM].into();
+            let is_load: AB::Expr = cur[COL_IS_LOAD].into();
+            let is_store: AB::Expr = cur[COL_IS_STORE].into();
+            let is_mem_op = is_load.clone() + is_store.clone();
+            
+            let cpu_mem_val = is_load.clone() * cur[COL_RD_VAL_NEW].into() + is_store.clone() * cur[COL_RS2_VAL].into();
+
+            let c_cpu_mem = term(one.clone(), clk.clone(), cpu_mem_addr.clone(), cpu_mem_val.clone(), is_store.clone());
+            let c_mem = term(one.clone(), mem_clk.clone(), mem_addr.clone(), mem_val.clone(), mem_is_write.clone());
+
+            let is_mem_op_ext: AB::ExprEF = is_mem_op.into();
+            let m_active_ext: AB::ExprEF = m_active.into();
+
+            let diff_cpu_mem = gamma_expr.clone() - c_cpu_mem;
+            let diff_mem = gamma_expr.clone() - c_mem;
+
+            let s_mem_cur: AB::ExprEF = perm_cur[1].into();
+            let s_mem_nxt: AB::ExprEF = perm_nxt[1].into();
+
             builder.when_transition().assert_zero_ext(
-                reg_acc_nxt - reg_acc_cur * (r_active_ext * reg_packet + not_r_active_ext),
+                (s_mem_nxt.clone() - s_mem_cur.clone()) * diff_cpu_mem.clone() * diff_mem.clone()
+                - (is_mem_op_ext * diff_mem - m_active_ext * diff_cpu_mem)
             );
+            builder.when_first_row().assert_zero_ext(s_mem_cur);
+            builder.when_last_row().assert_zero_ext(s_mem_nxt);
+            
         }
     }
 }

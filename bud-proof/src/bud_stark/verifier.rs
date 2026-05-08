@@ -269,7 +269,7 @@ where
         main_width: air.width(),
         num_public_values: air.num_public_values(),
         permutation_width,
-        num_permutation_challenges: if has_aux_trace { 2 } else { 0 },
+        num_permutation_challenges: if has_aux_trace { 3 } else { 0 },
         ..Default::default()
     };
     let log_num_quotient_chunks =
@@ -340,11 +340,6 @@ where
         proof.degree_bits - config.is_zk() as usize,
     ));
     challenger.observe(Val::<SC>::from_usize(preprocessed_width));
-    // TODO: Might be best practice to include other instance data here in the transcript, like some
-    // encoding of the AIR. This protects against transcript collisions between distinct instances.
-    // Practically speaking though, the only related known attack is from failing to include public
-    // values. It's not clear if failing to include other instance data could enable a transcript
-    // collision, since most such changes would completely change the set of satisfying witnesses.
     challenger.observe(commitments.trace.clone());
     if preprocessed_width > 0 {
         challenger.observe(preprocessed_commit.as_ref().unwrap().clone());
@@ -355,8 +350,10 @@ where
     if let Some(aux_commit) = &commitments.aux_trace {
         let rand_1: SC::Challenge = challenger.sample_algebra_element();
         let rand_2: SC::Challenge = challenger.sample_algebra_element();
+        let rand_3: SC::Challenge = challenger.sample_algebra_element();
         random_challenges.push(rand_1);
         random_challenges.push(rand_2);
+        random_challenges.push(rand_3);
         challenger.observe(aux_commit.clone());
     }
 

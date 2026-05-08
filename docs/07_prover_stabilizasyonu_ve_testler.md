@@ -72,12 +72,12 @@ BudZKVM prover mimarisi iki fazlıdır:
 
 Bu yapı cross-table lookup ve permutation kuralları için gereklidir. Örneğin CPU tablosundaki bir register okuması, register event tablosundaki önceki yazma ile bağlanmak istediğinde sadece ana trace yeterli olmaz. Lookup accumulator değerleri challenge'a bağlı olarak auxiliary trace içinde taşınır.
 
-Güncel stabilizasyon aşamasında auxiliary trace artık boş bir placeholder değildir. Adapter tarafındaki `generate_aux_trace` kapatma fonksiyonu Fiat-Shamir randomness değerlerini alır ve iki gerçek register accumulator sütunu üretir:
+Güncel stabilizasyon aşamasında auxiliary trace, **LogUp (Fractional Sums)** mimarisine geçirilmiştir. Adapter tarafındaki `generate_aux_trace` fonksiyonu Fiat-Shamir randomness değerlerini ($\alpha, \beta, \gamma$) alır ve kesirli toplamları içeren iki ana sütun üretir:
 
-* CPU register erişimleri accumulator'ı: her CPU satırındaki `rs1`, `rs2` okumasını ve `rd` yazmasını tek bir çarpımsal packet olarak biriktirir.
-* Register event tablosu accumulator'ı: ana trace içindeki register event sütunlarını aynı randomness ile packet'leyip biriktirir.
+* **Register Accumulator:** Her CPU satırındaki `rs1`, `rs2` okumasını ve `rd` yazmasını paydadaki birer kesirli terim olarak eklerken, register event tablosundaki karşılıklarını çıkarır.
+* **Memory Accumulator:** Benzer mantıkla CPU bellek erişimleri ile hafıza tablosu arasındaki tutarlılığı sağlar.
 
-Bu iki sütun henüz tam cross-table equality argümanının son hali değildir; ama Phase 6 için kritik eşiği geçer: auxiliary trace artık transcript challenge'larına bağlı gerçek witness verisi taşır ve AIR bu geçişleri constraint eder. Memory lookup tarafı hâlâ sonraki iş olarak durur.
+Bu geçiş, kısıt derecesini düşürerek kanıt üretim süresini optimize etmiş ve hafıza bütünlüğü (Memory Integrity) için gereken altyapıyı tamamlamıştır. Auxiliary trace artık transcript challenge'larına bağlı gerçek witness verisi taşır ve AIR bu geçişleri `when_transition`, `when_first_row` ve `when_last_row` kısıtlarıyla denetler.
 
 ## Constraint Folder Ne İşe Yarar?
 
@@ -159,7 +159,8 @@ Mevcut stabilizasyon çalışmasıyla hedeflenen taban şudur:
 * `bud-proof` testleri Goldilocks field üzerinde proof üretip doğrular.
 * Proof byte dizisi `bincode` üzerinden taşınabilir.
 * Main trace ve auxiliary trace için folder iskeleti aynı AIR'e bağlanır.
-* Auxiliary trace register accumulator sütunları üretir ve AIR bu sütunların geçişlerini denetler.
+* Auxiliary trace hem register hem de memory accumulator sütunlarını üretir; AIR bu sütunların geçişlerini ve sınır kısıtlarını (`when_first_row`, `when_last_row`) denetler.
+* Memory STARK altyapısı aktiftir; `Load` ve `Store` işlemleri CTL (Cross-Table Lookup) ile tam doğrulanmaktadır.
 * Sub builder yeni pencere API'siyle uyumludur.
 * Phase 0 geliştirme hijyeni için komut matrisi, CI workflow'u, opcode katkı rehberi, proof-format checklist'i ve yerel Markdown link checker bulunur.
 
@@ -170,8 +171,7 @@ Bu noktadan sonra yapılacak işler daha hedeflidir. Artık derleyici hataların
 Stabil tabanın üstüne şu işler eklenmelidir:
 
 * CPU ve register accumulator'larının final equality koşulunu netleştirmek.
-* Memory tabloları için event shape ve accumulator sütunlarını eklemek.
-* CPU, register ve memory tabloları arasında cross-table lookup kurallarını tamamlamak.
+* CPU, register ve memory tabloları arasında cross-table lookup kurallarının (LogUp) verimliliğini artırmak.
 * Public input bağlamını netleştirmek: program hash, başlangıç state'i ve final state proof'a bağlanmalı.
 * `COL_IS_HALT` kısıtını ayrıca denetlemek: halt sonrası satırlar program sonunu zayıflatmamalı.
 * Bitwise opcode'ların field içinde boolean decomposition kurallarını tamamlamak.

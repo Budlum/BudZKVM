@@ -126,6 +126,32 @@ Bu davranış `COL_IS_HALT` kısıtları güçlendirildiğinde prover tarafında
 * `instruction.rd`, `instruction.rs1`, `instruction.rs2` -> register index sütunları
 * `src1_val`, `src2_val`, `dst_val` -> operand ve sonuç sütunları
 * `registers` snapshot'ı -> register event üretiminde başlangıç ve geçiş bağlamı
+* `memory_addr`, `memory_val`, `is_memory_write` -> memory event üretiminin ana kaynağı
+
+## Prover Trace Sütunları (Main Trace)
+
+Prover tarafında oluşturulan ana matris (Main Trace) şu anda **55 sütun** genişliğindedir:
+
+| Aralık | Grup | Tanım |
+| --- | --- | --- |
+| 0 - 10 | Temel | PC, Next PC, Opcode, Register Index/Değerleri, Immediate |
+| 11 - 22 | CPU Selectors | `IS_ADD`, `IS_SUB`, `IS_LOAD`, `IS_HALT`, `JNZ_COND` vb. |
+| 23 - 28 | Register Table | `REG_CLK`, `REG_IDX`, `REG_VAL`, `REG_IS_WRITE` vb. |
+| 29 - 48 | Genişletilmiş Selectors | `IS_DIV`, `IS_AND`, `IS_STORE`, `IS_CALL`, `POSEIDON` vb. |
+| 49 - 54 | Memory Table | `MEM_CLK`, `MEM_ADDR`, `MEM_VAL`, `MEM_IS_WRITE`, `MEM_ACTIVE`, `MEM_SAME` |
+
+Hafıza (Memory) tablosu, CPU'nun yaptığı tüm `Load` ve `Store` işlemlerini toplar, bunları adres (`MEM_ADDR`) ve zaman (`MEM_CLK`) sırasına göre dizer. Bu sayede AIR kısıtları, aynı adrese yapılan okumanın bir önceki yazılan değerle aynı olduğunu (`MEM_SAME` kısıtıyla) kolayca denetleyebilir.
+
+## Yardımcı İz (Auxiliary Trace) Şeması
+
+BudZKVM, Cross-Table Lookup (CTL) işlemlerini doğrulamak için LogUp Fractional Sums yöntemini kullanır. Bu amaçla ana matrise ek olarak iki sütunlu bir yardımcı iz matrisi üretilir:
+
+| Sütun | Adı | Tanım |
+| --- | --- | --- |
+| 0 | `S_REG` | Register tutarlılığı için LogUp kesirli toplam toplayıcısı. |
+| 1 | `S_MEM` | Hafıza (Memory) tutarlılığı için LogUp kesirli toplam toplayıcısı. |
+
+Bu sütunlar Fiat-Shamir transcript'inden gelen $\alpha, \beta$ (tuple paketleme) ve $\gamma$ (kesirli payda) değerlerine bağlıdır. Her satırda $S_{i+1} = S_i + \sum \frac{w_j}{\gamma - C_j}$ kuralı işletilir. Program sonunda her iki sütunun da `0` olması zorunludur.
 
 Trace schema değişirse hem VM testleri hem prover testleri birlikte güncellenmelidir.
 

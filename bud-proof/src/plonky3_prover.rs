@@ -6,7 +6,7 @@ use p3_challenger::{HashChallenger, SerializingChallenger64};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{create_test_fri_params, TwoAdicFriPcs};
 use p3_goldilocks::Goldilocks;
 use p3_keccak::Keccak256Hash;
@@ -31,6 +31,14 @@ struct RegEvent {
     val: u64,
     is_write: bool,
     sub_clk: u8,
+}
+
+#[derive(Clone, Copy)]
+struct MemEvent {
+    clk: u64,
+    addr: u64,
+    val: u64,
+    is_write: bool,
 }
 
 pub struct Plonky3Adapter;
@@ -101,11 +109,29 @@ fn register_events(trace: &[Step]) -> Vec<RegEvent> {
     events
 }
 
+fn memory_events(trace: &[Step]) -> Vec<MemEvent> {
+    let mut events = Vec::new();
+    for (i, step) in trace.iter().enumerate() {
+        if let Some(addr) = step.memory_addr {
+            events.push(MemEvent {
+                clk: i as u64,
+                addr: addr as u64,
+                val: step.memory_val.unwrap_or(0),
+                is_write: step.is_memory_write,
+            });
+        }
+    }
+    events.sort_by_key(|e| (e.addr, e.clk));
+    events
+}
+
 fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
     let events = register_events(trace);
+    let mem_events = memory_events(trace);
     let n_cpu = trace.len();
     let n_reg = events.len();
-    let mut num_rows = n_cpu.max(n_reg).next_power_of_two();
+    let n_mem = mem_events.len();
+    let mut num_rows = n_cpu.max(n_reg).max(n_mem).next_power_of_two();
     if num_rows < 16 {
         num_rows = 16;
     }
@@ -204,26 +230,46 @@ fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
         }
     }
 
+    for (i, e) in mem_events.iter().enumerate() {
+        let row_start = i * TRACE_WIDTH;
+        values[row_start + COL_MEM_CLK] = Goldilocks::new(e.clk);
+        values[row_start + COL_MEM_ADDR] = Goldilocks::new(e.addr);
+        values[row_start + COL_MEM_VAL] = Goldilocks::new(e.val);
+        values[row_start + COL_MEM_IS_WRITE] = if e.is_write {
+            Goldilocks::new(1)
+        } else {
+            Goldilocks::new(0)
+        };
+        values[row_start + COL_MEM_ACTIVE] = Goldilocks::new(1);
+
+        if i < n_mem - 1 && mem_events[i + 1].addr == e.addr {
+            values[row_start + COL_MEM_SAME] = Goldilocks::new(1);
+        }
+    }
+
     (RowMajorMatrix::new(values, TRACE_WIDTH), num_rows)
 }
 
 fn register_term(
     alpha: MyExtensionField,
     beta: MyExtensionField,
+    table_id: Goldilocks,
     clk: Goldilocks,
     idx: Goldilocks,
     val: Goldilocks,
     is_write: Goldilocks,
 ) -> MyExtensionField {
-    let beta2 = beta * beta;
-    let beta3 = beta2 * beta;
-    let beta4 = beta3 * beta;
+    let b2 = beta * beta;
+    let b3 = b2 * beta;
+    let b4 = b3 * beta;
+    let b5 = b4 * beta;
 
     alpha
-        + beta * MyExtensionField::from(clk)
-        + beta2 * MyExtensionField::from(idx)
-        + beta3 * MyExtensionField::from(val)
-        + beta4 * MyExtensionField::from(is_write)
+        + beta * MyExtensionField::from(table_id)
+        + b2 * MyExtensionField::from(clk)
+        + b3 * MyExtensionField::from(idx)
+        + b4 * MyExtensionField::from(val)
+        + b5 * MyExtensionField::from(is_write)
 }
 
 fn aux_trace_generator(
@@ -234,7 +280,8 @@ fn aux_trace_generator(
         move |rand: &[MyExtensionField]| -> RowMajorMatrix<Goldilocks> {
             let alpha = rand[0];
             let beta = rand[1];
-            let mut aux_values = vec![MyExtensionField::ONE; trace_len * 2];
+            let gamma = rand[2];
+            let mut aux_values = vec![MyExtensionField::ZERO; trace_len * 2];
 
             for i in 0..trace_len.saturating_sub(1) {
                 let row_start = i * TRACE_WIDTH;
@@ -269,44 +316,40 @@ fn aux_trace_generator(
                     + main_trace.values[row_start + COL_IS_SYSCALL]
                     + main_trace.values[row_start + COL_IS_VERIFY_MERKLE]
                     + main_trace.values[row_start + COL_IS_HALT];
-                let cpu_packet = register_term(
-                    alpha,
-                    beta,
-                    main_trace.values[row_start + COL_CLK],
-                    main_trace.values[row_start + COL_RS1_IDX],
-                    main_trace.values[row_start + COL_RS1_VAL],
-                    Goldilocks::ZERO,
-                ) * register_term(
-                    alpha,
-                    beta,
-                    main_trace.values[row_start + COL_CLK],
-                    main_trace.values[row_start + COL_RS2_IDX],
-                    main_trace.values[row_start + COL_RS2_VAL],
-                    Goldilocks::ZERO,
-                ) * register_term(
-                    alpha,
-                    beta,
-                    main_trace.values[row_start + COL_CLK],
-                    main_trace.values[row_start + COL_RD_IDX],
-                    main_trace.values[row_start + COL_RD_VAL_NEW],
-                    Goldilocks::ONE,
-                );
-                let reg_packet = register_term(
-                    alpha,
-                    beta,
-                    main_trace.values[row_start + COL_REG_CLK],
-                    main_trace.values[row_start + COL_REG_IDX],
-                    main_trace.values[row_start + COL_REG_VAL],
-                    main_trace.values[row_start + COL_REG_IS_WRITE],
-                );
+                let is_cpu_field = MyExtensionField::from(is_cpu);
+                let r_active_field = MyExtensionField::from(main_trace.values[row_start + COL_REG_ACTIVE]);
+                let m_active_field = MyExtensionField::from(main_trace.values[row_start + COL_MEM_ACTIVE]);
+                
+                let table_reg = Goldilocks::ZERO;
+                let c_rs1 = register_term(alpha, beta, table_reg, main_trace.values[row_start + COL_CLK], main_trace.values[row_start + COL_RS1_IDX], main_trace.values[row_start + COL_RS1_VAL], Goldilocks::ZERO);
+                let c_rs2 = register_term(alpha, beta, table_reg, main_trace.values[row_start + COL_CLK], main_trace.values[row_start + COL_RS2_IDX], main_trace.values[row_start + COL_RS2_VAL], Goldilocks::ZERO);
+                let c_rd = register_term(alpha, beta, table_reg, main_trace.values[row_start + COL_CLK], main_trace.values[row_start + COL_RD_IDX], main_trace.values[row_start + COL_RD_VAL_NEW], Goldilocks::ONE);
+                let c_reg = register_term(alpha, beta, table_reg, main_trace.values[row_start + COL_REG_CLK], main_trace.values[row_start + COL_REG_IDX], main_trace.values[row_start + COL_REG_VAL], main_trace.values[row_start + COL_REG_IS_WRITE]);
 
-                let cpu_factor = MyExtensionField::from(is_cpu) * cpu_packet
-                    + MyExtensionField::from(Goldilocks::ONE - is_cpu);
-                let reg_active = main_trace.values[row_start + COL_REG_ACTIVE];
-                let reg_factor = MyExtensionField::from(reg_active) * reg_packet
-                    + MyExtensionField::from(Goldilocks::ONE - reg_active);
-                aux_values[(i + 1) * 2] = aux_values[i * 2] * cpu_factor;
-                aux_values[(i + 1) * 2 + 1] = aux_values[i * 2 + 1] * reg_factor;
+                let mut sum = aux_values[i * 2];
+                sum += is_cpu_field * (gamma - c_rs1).inverse();
+                sum += is_cpu_field * (gamma - c_rs2).inverse();
+                sum += is_cpu_field * (gamma - c_rd).inverse();
+                sum -= r_active_field * (gamma - c_reg).inverse();
+
+                aux_values[(i + 1) * 2] = sum;
+
+                let is_load = main_trace.values[row_start + COL_IS_LOAD];
+                let is_store = main_trace.values[row_start + COL_IS_STORE];
+                let is_mem_op = is_load + is_store;
+                
+                let cpu_mem_addr = main_trace.values[row_start + COL_RS1_VAL] + main_trace.values[row_start + COL_IMM];
+                let cpu_mem_val = is_load * main_trace.values[row_start + COL_RD_VAL_NEW] + is_store * main_trace.values[row_start + COL_RS2_VAL];
+                
+                let table_mem = Goldilocks::ONE;
+                let c_cpu_mem = register_term(alpha, beta, table_mem, main_trace.values[row_start + COL_CLK], cpu_mem_addr, cpu_mem_val, is_store);
+                let c_mem = register_term(alpha, beta, table_mem, main_trace.values[row_start + COL_MEM_CLK], main_trace.values[row_start + COL_MEM_ADDR], main_trace.values[row_start + COL_MEM_VAL], main_trace.values[row_start + COL_MEM_IS_WRITE]);
+
+                let mut sum_mem = aux_values[i * 2 + 1];
+                sum_mem += MyExtensionField::from(is_mem_op) * (gamma - c_cpu_mem).inverse();
+                sum_mem -= m_active_field * (gamma - c_mem).inverse();
+                
+                aux_values[(i + 1) * 2 + 1] = sum_mem;
             }
 
             RowMajorMatrix::new(aux_values, 2).flatten_to_base()

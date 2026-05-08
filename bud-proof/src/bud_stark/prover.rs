@@ -82,7 +82,7 @@ where
         main_width: air.width(),
         num_public_values: air.num_public_values(),
         permutation_width: if has_aux_trace { 2 } else { 0 },
-        num_permutation_challenges: if has_aux_trace { 2 } else { 0 },
+        num_permutation_challenges: if has_aux_trace { 3 } else { 0 },
         ..Default::default()
     };
 
@@ -168,8 +168,6 @@ where
     challenger.observe(Val::<SC>::from_u8(log_ext_degree as u8));
     challenger.observe(Val::<SC>::from_u8(log_degree as u8));
     challenger.observe(Val::<SC>::from_usize(preprocessed_width));
-    // TODO: Might be best practice to include other instance data here; see verifier comment.
-
     // Observe the Merkle root of the trace commitment.
     challenger.observe(trace_commit.clone());
     if preprocessed_width > 0 {
@@ -183,8 +181,10 @@ where
     let (aux_commit, aux_data) = if let Some(gen) = generate_aux_trace {
         let rand_1: SC::Challenge = challenger.sample_algebra_element();
         let rand_2: SC::Challenge = challenger.sample_algebra_element();
+        let rand_3: SC::Challenge = challenger.sample_algebra_element();
         random_challenges.push(rand_1);
         random_challenges.push(rand_2);
+        random_challenges.push(rand_3);
         let aux_trace = gen(&random_challenges);
         let (commit, data) = info_span!("commit to aux trace")
             .in_scope(|| pcs.commit([(ext_trace_domain, aux_trace)]));

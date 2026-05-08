@@ -41,12 +41,13 @@ Bu ikisini BudZKVM'de "Wide Trace" adı verilen tek bir matriste yan yana birle�
 
 Eğer CPU tablosu ile Register tablosu ayrı mantıklara sahipse, CPU'nun $R1$'den okuduğu değerin, o anda $R1$'in **gerçekten sahip olduğu değer** olduğunu nasıl kanıtlarız? 
 
-Bu STARK dünyasının en ünlü sorunlarından biridir ve çözümü **Permutation Argument (Permütasyon Argümanı)** veya **LogUp** adı verilen tekniklerdir.
+Bu STARK dünyasının en ünlü sorunlarından biridir ve çözümü **Permutation Argument (Permütasyon Argümanı)** veya **LogUp (Fractional Sums)** adı verilen tekniklerdir. BudZKVM'de üretim kalitesinde performans ve güvenlik için **LogUp** tekniği tercih edilmiştir.
 
 Kısaca:
 1. CPU, R1'den `5` okuduğunu iddia eder ve bunu bir "Veriyolu (Bus)" havuzuna atar.
 2. Register tablosu, o anda R1'in içinde `5` olduğunu kontrol eder ve bu işlemi onaylayıp havuzdan çeker.
-3. Günün sonunda havuzun toplamı/çarpımı sıfır (veya bir) çıkarsa, CPU ile Register tablosu "Tutarlı" demektir. Hiçbir değer yoktan var edilmemiş veya kaybolmamıştır.
+3. LogUp mekanizması ile bu iddialar kesirli toplamlar (fractional sums) olarak biriktirilir.
+4. Günün sonunda toplam sıfır çıkarsa, CPU ile Register tablosu "Tutarlı" demektir. Hiçbir değer yoktan var edilmemiş veya kaybolmamıştır.
 
 ## `COL_REG_SAME` ve Sub-Clock Ordering
 

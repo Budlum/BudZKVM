@@ -32,6 +32,10 @@ pub struct Step {
     pub src2_val: u64,
     pub dst_val: u64,
     pub registers: [u64; 32],
+    pub memory_addr: Option<usize>,
+    pub memory_val: Option<u64>,
+    pub is_memory_write: bool,
+    pub stack_pointer: usize,
 }
 
 impl Vm {
@@ -86,6 +90,10 @@ impl Vm {
         let dst_idx = inst.rd;
         let src1_val = self.registers[src1_idx as usize];
         let src2_val = self.registers[src2_idx as usize];
+
+        let mut memory_addr = None;
+        let mut memory_val = None;
+        let mut is_memory_write = false;
 
         let (dst_val, next_pc) = match inst.opcode {
             Opcode::Halt => {
@@ -158,7 +166,10 @@ impl Vm {
                 {
                     let mut bytes = [0u8; 8];
                     bytes.copy_from_slice(&self.memory[addr..addr + 8]);
-                    u64::from_le_bytes(bytes)
+                    memory_addr = Some(addr);
+                    let val = u64::from_le_bytes(bytes);
+                    memory_val = Some(val);
+                    val
                 } else {
                     0
                 };
@@ -170,6 +181,9 @@ impl Vm {
                 if let Some(addr) = Self::memory_word_addr(src1_val, inst.imm, self.memory.len()) {
                     let bytes = src2_val.to_le_bytes();
                     self.memory[addr..addr + 8].copy_from_slice(&bytes);
+                    memory_addr = Some(addr);
+                    memory_val = Some(src2_val);
+                    is_memory_write = true;
                 }
                 self.pc += 1;
                 (0, cur_pc + 1)
@@ -330,6 +344,10 @@ impl Vm {
             src2_val,
             dst_val,
             registers: self.registers,
+            memory_addr,
+            memory_val,
+            is_memory_write,
+            stack_pointer: self.stack.len(),
         });
     }
 
