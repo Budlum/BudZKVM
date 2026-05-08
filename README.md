@@ -2,7 +2,7 @@
 
 BudZKVM is a ZK-native virtual machine, language toolchain, and STARK proving stack built around a small deterministic ISA, a trace-generating VM, and a Plonky3-based prover backend.
 
-The project is currently focused on stabilizing the `bud-proof` crate on Plonky3 0.5.2, restoring proof serialization, and preparing the prover architecture for a two-phase STARK flow with cross-table lookup/permutation arguments.
+The project has successfully transitioned the prover architecture to a production-grade Multi-STARK system using LogUp (fractional sum) interaction arguments, ensuring full register and memory consistency within the Plonky3 0.5.2 backend.
 
 ## What Is In This Repository?
 
@@ -21,14 +21,12 @@ BudZKVM is organized as a Rust workspace:
 
 ## Current Focus
 
-The active engineering focus is the Plonky3 0.5.2 prover stabilization track:
-
-1. Keep the workspace compiling with the new Plonky3 generic configuration model.
-2. Make `bud_stark` the primary proving path used by `Plonky3Adapter`.
-3. Preserve bincode-compatible proof bytes for CLI and L1 integration.
-4. Stabilize the two-phase trace architecture: main trace first, auxiliary trace after Fiat-Shamir randomness.
-5. Prepare `folder.rs` and `sub_builder.rs` for real cross-table lookup/permutation constraints.
-6. Expand tests so every prover refactor has immediate feedback.
+1. Maintain a clean workspace using the Plonky3 0.5.2 generic configuration model.
+2. Leverage the `bud_stark` core for production-grade LogUp Cross-Table Lookups (CTL).
+3. Ensure Register and Memory consistency via two-phase auxiliary trace accumulators.
+4. Optimize constraint degrees (reduced from 7 to 5) for faster proof generation.
+5. Expand automated testing for all major opcode families and memory operations.
+6. Bound program identity and public inputs for full protocol soundness.
 
 ## Book-Style Documentation
 
@@ -230,23 +228,23 @@ Status: partially implemented, must be expanded opcode by opcode.
 
 ### Phase 6: Two-Phase Trace and Cross-Table Lookup
 
-Status: scaffolded, next major prover milestone.
+Status: mostly completed, moving to optimization.
 
 - [x] Introduce a two-phase proving flow: main trace first, Fiat-Shamir randomness second, auxiliary trace third.
 - [x] Add auxiliary trace plumbing to the prover API.
 - [x] Make `PermutationAirBuilder` expose auxiliary windows instead of empty placeholders.
 - [x] Update `SubAirBuilder` and sliced builders to forward the relevant builder capabilities.
 - [x] Recompose verifier-side auxiliary opening values into challenge field elements.
-- [ ] Replace the current placeholder auxiliary trace with real accumulator columns.
-- [ ] Define the register event table shape explicitly.
-- [ ] Define the memory event table shape explicitly.
-- [ ] Implement CPU-to-register cross-table lookup.
-- [ ] Implement CPU-to-memory cross-table lookup.
-- [ ] Add permutation argument constraints for read-after-write consistency.
+- [x] Implement real LogUp (fractional sum) accumulator columns for auxiliary trace.
+- [x] Define and implement the register event table shape and constraints.
+- [x] Define and implement the memory event table shape and constraints.
+- [x] Implement CPU-to-register cross-table lookup using 3 challenges ($\alpha, \beta, \gamma$).
+- [x] Implement CPU-to-memory cross-table lookup with sorted memory event validation.
+- [x] Add LogUp boundary constraints (`when_first_row`, `when_last_row`) for accumulator integrity.
 - [ ] Add tests where swapped or missing register events fail verification.
 - [ ] Add tests where memory read/write order violations fail verification.
-- [ ] Decide whether lookup grand products live in one shared auxiliary table or per-table auxiliary segments.
-- [ ] Document the randomness challenge layout used by the auxiliary trace generator.
+- [ ] Optimize fractional sum inversion costs during auxiliary trace generation.
+- [ ] Document the exact randomness challenge layout used by the auxiliary trace generator.
 
 ### Phase 7: Proof API, Transport, and Compatibility
 
