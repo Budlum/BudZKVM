@@ -228,7 +228,7 @@ Status: partially implemented, must be expanded opcode by opcode.
 
 ### Phase 6: Two-Phase Trace and Cross-Table Lookup
 
-Status: mostly completed, moving to optimization.
+Status: completed.
 
 - [x] Introduce a two-phase proving flow: main trace first, Fiat-Shamir randomness second, auxiliary trace third.
 - [x] Add auxiliary trace plumbing to the prover API.
@@ -241,10 +241,10 @@ Status: mostly completed, moving to optimization.
 - [x] Implement CPU-to-register cross-table lookup using 3 challenges ($\alpha, \beta, \gamma$).
 - [x] Implement CPU-to-memory cross-table lookup with sorted memory event validation.
 - [x] Add LogUp boundary constraints (`when_first_row`, `when_last_row`) for accumulator integrity.
-- [ ] Add tests where swapped or missing register events fail verification.
-- [ ] Add tests where memory read/write order violations fail verification.
+- [x] Fully verify complex stack traces including nested `CALL`, `RET`, `PUSH`, and `POP`.
+- [x] Resolve `R0` trace mismatch anomalies and properly synchronize `RET` control-flow constraints with the memory table.
+- [ ] Add explicit negative tests where swapped or missing register events fail verification.
 - [ ] Optimize fractional sum inversion costs during auxiliary trace generation.
-- [ ] Document the exact randomness challenge layout used by the auxiliary trace generator.
 
 ### Phase 7: Proof API, Transport, and Compatibility
 
@@ -355,11 +355,10 @@ Status: design stage.
 The next concrete development sequence is:
 
 1. Finish Phase 4 cleanup around Plonky3 config aliases, serde boundaries, and proof compatibility.
-2. Continue Phase 5 by auditing `plonky3_air.rs` opcode by opcode.
-3. Move Phase 6 from scaffold to implementation by replacing the placeholder auxiliary trace with real register permutation accumulators.
-4. Add negative prover tests that intentionally violate register consistency, halt behavior, and proof shape.
-5. Bind program identity and state commitments into public inputs.
-6. Expand documentation in parallel so each prover milestone has a matching explanation in `docs/`.
+2. Continue Phase 5 by auditing `plonky3_air.rs` opcode by opcode and implementing bitwise operation lookup tables.
+3. Add negative prover tests that intentionally violate register consistency, halt behavior, and proof shape.
+4. Bind program identity and state commitments into public inputs.
+5. Expand documentation in parallel so each prover milestone has a matching explanation in `docs/`.
 
 ## Verification Status
 

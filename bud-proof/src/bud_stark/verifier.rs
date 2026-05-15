@@ -340,6 +340,11 @@ where
         proof.degree_bits - config.is_zk() as usize,
     ));
     challenger.observe(Val::<SC>::from_usize(preprocessed_width));
+    // TODO: Might be best practice to include other instance data here in the transcript, like some
+    // encoding of the AIR. This protects against transcript collisions between distinct instances.
+    // Practically speaking though, the only related known attack is from failing to include public
+    // values. It's not clear if failing to include other instance data could enable a transcript
+    // collision, since most such changes would completely change the set of satisfying witnesses.
     challenger.observe(commitments.trace.clone());
     if preprocessed_width > 0 {
         challenger.observe(preprocessed_commit.as_ref().unwrap().clone());

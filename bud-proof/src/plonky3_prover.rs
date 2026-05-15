@@ -6,7 +6,7 @@ use p3_challenger::{HashChallenger, SerializingChallenger64};
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{create_test_fri_params, TwoAdicFriPcs};
 use p3_goldilocks::Goldilocks;
 use p3_keccak::Keccak256Hash;
@@ -41,6 +41,8 @@ struct MemEvent {
     is_write: bool,
 }
 
+const STACK_BASE: u64 = 1 << 60;
+
 pub struct Plonky3Adapter;
 
 fn build_config() -> MyConfig {
@@ -68,19 +70,11 @@ fn initial_registers(trace: &[Step]) -> [u64; 32] {
 
 fn register_events(trace: &[Step]) -> Vec<RegEvent> {
     let mut events = Vec::new();
-    let initial_registers = initial_registers(trace);
-
-    for i in 0..32 {
-        events.push(RegEvent {
-            clk: 0,
-            idx: i,
-            val: initial_registers[i as usize],
-            is_write: true,
-            sub_clk: 0,
-        });
-    }
 
     for (i, step) in trace.iter().enumerate() {
+        if step.instruction.opcode == bud_isa::Opcode::Halt {
+            continue;
+        }
         let clk = i as u64;
         events.push(RegEvent {
             clk,
@@ -99,7 +93,7 @@ fn register_events(trace: &[Step]) -> Vec<RegEvent> {
         events.push(RegEvent {
             clk,
             idx: step.dst_idx as u64,
-            val: step.dst_val,
+            val: if step.dst_idx == 0 { 0 } else { step.dst_val },
             is_write: true,
             sub_clk: 3,
         });
@@ -112,13 +106,56 @@ fn register_events(trace: &[Step]) -> Vec<RegEvent> {
 fn memory_events(trace: &[Step]) -> Vec<MemEvent> {
     let mut events = Vec::new();
     for (i, step) in trace.iter().enumerate() {
+        let clk = i as u64;
         if let Some(addr) = step.memory_addr {
             events.push(MemEvent {
-                clk: i as u64,
+                clk,
                 addr: addr as u64,
                 val: step.memory_val.unwrap_or(0),
                 is_write: step.is_memory_write,
             });
+        }
+
+        // Stack operations as memory events
+        let opcode = step.instruction.opcode;
+        match opcode {
+            bud_isa::Opcode::Push => {
+                events.push(MemEvent {
+                    clk,
+                    addr: STACK_BASE + step.stack_pointer as u64 - 1, // Step records ptr AFTER op? No, let's check Vm.
+                    // Wait, Vm records step AFTER the logic.
+                    // Push: stack.push(val); trace.push(Step{ stack_pointer: stack.len() })
+                    // So for Push, the value is at ptr - 1.
+                    val: step.src1_val,
+                    is_write: true,
+                });
+            }
+            bud_isa::Opcode::Pop => {
+                events.push(MemEvent {
+                    clk,
+                    addr: STACK_BASE + step.stack_pointer as u64, // Pop decrements stack.len() then records it.
+                    // So the popped value was at the NEW ptr.
+                    val: step.dst_val,
+                    is_write: false,
+                });
+            }
+            bud_isa::Opcode::Call => {
+                events.push(MemEvent {
+                    clk,
+                    addr: STACK_BASE + step.stack_pointer as u64 - 1,
+                    val: step.pc as u64 + 1,
+                    is_write: true,
+                });
+            }
+            bud_isa::Opcode::Ret => {
+                events.push(MemEvent {
+                    clk,
+                    addr: STACK_BASE + step.stack_pointer as u64,
+                    val: step.dst_val, // Return address
+                    is_write: false,
+                });
+            }
+            _ => {}
         }
     }
     events.sort_by_key(|e| (e.addr, e.clk));
@@ -131,7 +168,7 @@ fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
     let n_cpu = trace.len();
     let n_reg = events.len();
     let n_mem = mem_events.len();
-    let mut num_rows = n_cpu.max(n_reg).max(n_mem).next_power_of_two();
+    let mut num_rows = (n_cpu + 1).max(n_reg + 1).max(n_mem + 1).next_power_of_two();
     if num_rows < 16 {
         num_rows = 16;
     }
@@ -151,6 +188,16 @@ fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
         values[row_start + COL_RS2_VAL] = Goldilocks::new(step.src2_val);
         values[row_start + COL_RD_VAL_NEW] = Goldilocks::new(step.dst_val);
         values[row_start + COL_NEXT_PC] = Goldilocks::new(step.next_pc as u64);
+
+        // Stack pointer: VM Step records the ptr AFTER the operation.
+        // We want COL_STACK_PTR to be the ptr BEFORE the operation to match AIR logic.
+        let opcode = step.instruction.opcode;
+        let cur_stack_ptr = match opcode {
+            bud_isa::Opcode::Push | bud_isa::Opcode::Call => step.stack_pointer - 1,
+            bud_isa::Opcode::Pop | bud_isa::Opcode::Ret => step.stack_pointer + 1,
+            _ => step.stack_pointer,
+        };
+        values[row_start + COL_STACK_PTR] = Goldilocks::new(cur_stack_ptr as u64);
 
         let imm = step.instruction.imm;
         values[row_start + COL_IMM] = if imm < 0 {
@@ -202,6 +249,7 @@ fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
         }
     }
 
+
     for i in n_cpu..num_rows {
         let row_start = i * TRACE_WIDTH;
         values[row_start + COL_CLK] = Goldilocks::new(i as u64);
@@ -210,6 +258,8 @@ fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
             let last_pc = trace[n_cpu - 1].next_pc as u64;
             values[row_start + COL_PC] = Goldilocks::new(last_pc);
             values[row_start + COL_NEXT_PC] = Goldilocks::new(last_pc);
+            // Maintain stack pointer in padding rows
+            values[row_start + COL_STACK_PTR] = Goldilocks::new(trace[n_cpu - 1].stack_pointer as u64);
         }
     }
 
@@ -218,6 +268,7 @@ fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
         values[row_start + COL_REG_CLK] = Goldilocks::new(e.clk);
         values[row_start + COL_REG_IDX] = Goldilocks::new(e.idx);
         values[row_start + COL_REG_VAL] = Goldilocks::new(e.val);
+        values[row_start + COL_REG_SUB_CLK] = Goldilocks::new(e.sub_clk as u64);
         values[row_start + COL_REG_IS_WRITE] = if e.is_write {
             Goldilocks::new(1)
         } else {
@@ -231,6 +282,7 @@ fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
     }
 
     for (i, e) in mem_events.iter().enumerate() {
+
         let row_start = i * TRACE_WIDTH;
         values[row_start + COL_MEM_CLK] = Goldilocks::new(e.clk);
         values[row_start + COL_MEM_ADDR] = Goldilocks::new(e.addr);
@@ -247,6 +299,9 @@ fn trace_matrix(trace: &[Step]) -> (RowMajorMatrix<Goldilocks>, usize) {
         }
     }
 
+    for r in 0..num_rows {
+        let row_start = r * TRACE_WIDTH;
+    }
     (RowMajorMatrix::new(values, TRACE_WIDTH), num_rows)
 }
 
@@ -314,39 +369,78 @@ fn aux_trace_generator(
                     + main_trace.values[row_start + COL_IS_SWRITE]
                     + main_trace.values[row_start + COL_IS_POSEIDON]
                     + main_trace.values[row_start + COL_IS_SYSCALL]
-                    + main_trace.values[row_start + COL_IS_VERIFY_MERKLE]
-                    + main_trace.values[row_start + COL_IS_HALT];
-                let is_cpu_field = MyExtensionField::from(is_cpu);
+                    + main_trace.values[row_start + COL_IS_VERIFY_MERKLE];
+                let is_real_op_field = MyExtensionField::from(is_cpu);
                 let r_active_field = MyExtensionField::from(main_trace.values[row_start + COL_REG_ACTIVE]);
                 let m_active_field = MyExtensionField::from(main_trace.values[row_start + COL_MEM_ACTIVE]);
                 
                 let table_reg = Goldilocks::ZERO;
-                let c_rs1 = register_term(alpha, beta, table_reg, main_trace.values[row_start + COL_CLK], main_trace.values[row_start + COL_RS1_IDX], main_trace.values[row_start + COL_RS1_VAL], Goldilocks::ZERO);
-                let c_rs2 = register_term(alpha, beta, table_reg, main_trace.values[row_start + COL_CLK], main_trace.values[row_start + COL_RS2_IDX], main_trace.values[row_start + COL_RS2_VAL], Goldilocks::ZERO);
-                let c_rd = register_term(alpha, beta, table_reg, main_trace.values[row_start + COL_CLK], main_trace.values[row_start + COL_RD_IDX], main_trace.values[row_start + COL_RD_VAL_NEW], Goldilocks::ONE);
-                let c_reg = register_term(alpha, beta, table_reg, main_trace.values[row_start + COL_REG_CLK], main_trace.values[row_start + COL_REG_IDX], main_trace.values[row_start + COL_REG_VAL], main_trace.values[row_start + COL_REG_IS_WRITE]);
+                let clk_val = main_trace.values[row_start + COL_CLK].as_canonical_u64();
+                let reg_clk_val = main_trace.values[row_start + COL_REG_CLK].as_canonical_u64();
+                let reg_sub_clk_val = main_trace.values[row_start + COL_REG_SUB_CLK].as_canonical_u64();
+                
+                let c_rs1 = register_term(alpha, beta, table_reg, Goldilocks::from_u64(clk_val * 4 + 1), main_trace.values[row_start + COL_RS1_IDX], main_trace.values[row_start + COL_RS1_VAL], Goldilocks::ZERO);
+                let c_rs2 = register_term(alpha, beta, table_reg, Goldilocks::from_u64(clk_val * 4 + 2), main_trace.values[row_start + COL_RS2_IDX], main_trace.values[row_start + COL_RS2_VAL], Goldilocks::ZERO);
+                let c_rd = register_term(alpha, beta, table_reg, Goldilocks::from_u64(clk_val * 4 + 3), main_trace.values[row_start + COL_RD_IDX], main_trace.values[row_start + COL_RD_VAL_NEW], Goldilocks::ONE);
+                let c_reg = register_term(alpha, beta, table_reg, Goldilocks::from_u64(reg_clk_val * 4 + reg_sub_clk_val), main_trace.values[row_start + COL_REG_IDX], main_trace.values[row_start + COL_REG_VAL], main_trace.values[row_start + COL_REG_IS_WRITE]);
 
                 let mut sum = aux_values[i * 2];
-                sum += is_cpu_field * (gamma - c_rs1).inverse();
-                sum += is_cpu_field * (gamma - c_rs2).inverse();
-                sum += is_cpu_field * (gamma - c_rd).inverse();
+                sum += is_real_op_field * (gamma - c_rs1).inverse();
+                sum += is_real_op_field * (gamma - c_rs2).inverse();
+                sum += is_real_op_field * (gamma - c_rd).inverse();
                 sum -= r_active_field * (gamma - c_reg).inverse();
 
                 aux_values[(i + 1) * 2] = sum;
 
                 let is_load = main_trace.values[row_start + COL_IS_LOAD];
                 let is_store = main_trace.values[row_start + COL_IS_STORE];
-                let is_mem_op = is_load + is_store;
+                let is_push = main_trace.values[row_start + COL_IS_PUSH];
+                let is_pop = main_trace.values[row_start + COL_IS_POP];
+                let is_call = main_trace.values[row_start + COL_IS_CALL];
+                let is_ret = main_trace.values[row_start + COL_IS_RET];
+
+                let rs1_idx = main_trace.values[row_start + COL_RS1_IDX];
+                let is_real_mem_op = (is_load + is_store) * if rs1_idx != Goldilocks::ZERO { Goldilocks::ONE } else { Goldilocks::ZERO };
+                let is_stack_op = is_push + is_pop + is_call + is_ret;
+                let is_any_mem_op = is_real_mem_op + is_stack_op;
                 
-                let cpu_mem_addr = main_trace.values[row_start + COL_RS1_VAL] + main_trace.values[row_start + COL_IMM];
-                let cpu_mem_val = is_load * main_trace.values[row_start + COL_RD_VAL_NEW] + is_store * main_trace.values[row_start + COL_RS2_VAL];
+                let cpu_mem_addr = if is_real_mem_op == Goldilocks::ONE {
+                    main_trace.values[row_start + COL_RS1_VAL] + main_trace.values[row_start + COL_IMM]
+                } else if is_stack_op == Goldilocks::ONE {
+                    let ptr = main_trace.values[row_start + COL_STACK_PTR];
+                    if is_push == Goldilocks::ONE || is_call == Goldilocks::ONE {
+                        Goldilocks::new(STACK_BASE) + ptr
+                    } else {
+                        Goldilocks::new(STACK_BASE) + ptr - Goldilocks::ONE
+                    }
+                } else {
+                    Goldilocks::ZERO
+                };
+
+                let cpu_mem_val = if is_load == Goldilocks::ONE {
+                    main_trace.values[row_start + COL_RD_VAL_NEW]
+                } else if is_store == Goldilocks::ONE {
+                    main_trace.values[row_start + COL_RS2_VAL]
+                } else if is_push == Goldilocks::ONE {
+                    main_trace.values[row_start + COL_RS1_VAL]
+                } else if is_pop == Goldilocks::ONE {
+                    main_trace.values[row_start + COL_RD_VAL_NEW]
+                } else if is_call == Goldilocks::ONE {
+                    main_trace.values[row_start + COL_PC] + Goldilocks::ONE
+                } else if is_ret == Goldilocks::ONE {
+                    main_trace.values[row_start + COL_NEXT_PC]
+                } else {
+                    Goldilocks::ZERO
+                };
+
+                let is_write = is_store + is_push + is_call;
                 
                 let table_mem = Goldilocks::ONE;
-                let c_cpu_mem = register_term(alpha, beta, table_mem, main_trace.values[row_start + COL_CLK], cpu_mem_addr, cpu_mem_val, is_store);
+                let c_cpu_mem = register_term(alpha, beta, table_mem, main_trace.values[row_start + COL_CLK], cpu_mem_addr, cpu_mem_val, is_write);
                 let c_mem = register_term(alpha, beta, table_mem, main_trace.values[row_start + COL_MEM_CLK], main_trace.values[row_start + COL_MEM_ADDR], main_trace.values[row_start + COL_MEM_VAL], main_trace.values[row_start + COL_MEM_IS_WRITE]);
 
                 let mut sum_mem = aux_values[i * 2 + 1];
-                sum_mem += MyExtensionField::from(is_mem_op) * (gamma - c_cpu_mem).inverse();
+                sum_mem += MyExtensionField::from(is_any_mem_op) * (gamma - c_cpu_mem).inverse();
                 sum_mem -= m_active_field * (gamma - c_mem).inverse();
                 
                 aux_values[(i + 1) * 2 + 1] = sum_mem;
@@ -366,8 +460,8 @@ impl ProverAdapter for Plonky3Adapter {
         let proof = prove(
             &config,
             &air,
-            matrix,
-            Some(aux_trace_generator(aux_matrix, trace_len)),
+            matrix.clone(),
+            Some(aux_trace_generator(matrix.clone(), trace_len)),
             &vec![],
         );
         let data = bincode::serialize(&proof).expect("failed to serialize Plonky3 proof");
@@ -407,8 +501,15 @@ mod tests {
         vm.run(&program);
 
         let proof = Plonky3Adapter::prove(&vm.trace, vm.trace.len());
-        assert!(!proof.data.is_empty());
-        assert!(Plonky3Adapter::verify(&proof, vm.trace.len()));
+        
+        // Pinpoint failure if verification fails
+        if !Plonky3Adapter::verify(&proof, vm.trace.len()) {
+             let (main_trace, _) = trace_matrix(&vm.trace);
+             let challenges = [Goldilocks::new(1), Goldilocks::new(2), Goldilocks::new(3)]; // Dummy but enough for symbolic
+             // Actually we can't easily check constraints here without full setup, 
+             // but we can try to re-run with debug assertions in a specific way.
+             panic!("Verification failed for program trace");
+        }
         proof
     }
 
@@ -451,6 +552,46 @@ mod tests {
     }
 
     #[test]
+    fn proves_push_pop_trace() {
+        let program = vec![
+            inst(Opcode::Load, 1, 0, 0, 123),
+            inst(Opcode::Push, 0, 1, 0, 0),
+            inst(Opcode::Pop, 2, 0, 0, 0),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+
+        prove_and_verify(program, |_| {});
+    }
+
+    #[test]
+    fn proves_call_ret_trace() {
+        let program = vec![
+            inst(Opcode::Call, 0, 0, 0, 2),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+            inst(Opcode::Load, 1, 0, 0, 7),
+            inst(Opcode::Ret, 0, 0, 0, 0),
+        ];
+
+        prove_and_verify(program, |_| {});
+    }
+
+    #[test]
+    fn proves_nested_call_trace() {
+        let program = vec![
+            inst(Opcode::Call, 0, 0, 0, 3), // Call B
+            inst(Opcode::Halt, 0, 0, 0, 0),
+            // Func A (index 2)
+            inst(Opcode::Load, 1, 0, 0, 42),
+            inst(Opcode::Ret, 0, 0, 0, 0),
+            // Func B (index 4)
+            inst(Opcode::Call, 0, 0, 0, -2), // Call A
+            inst(Opcode::Ret, 0, 0, 0, 0),
+        ];
+
+        prove_and_verify(program, |_| {});
+    }
+
+    #[test]
     fn proof_bytes_roundtrip_before_verification() {
         let program = vec![
             inst(Opcode::Add, 1, 2, 3, 0),
@@ -476,5 +617,59 @@ mod tests {
         };
 
         assert!(!Plonky3Adapter::verify(&proof, 0));
+    }
+
+    #[test]
+    fn rejects_failed_assertion_trace() {
+        let program = vec![
+            inst(Opcode::Load, 1, 0, 0, 0), // r1 = 0
+            inst(Opcode::Assert, 0, 1, 0, 0), // assert(r1) -> should fail
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+
+        let mut vm = Vm::new(64);
+        for _ in 0..2 {
+            let raw_inst = program[vm.pc];
+            let inst = Instruction::decode(raw_inst);
+            let cur_pc = vm.pc;
+            let src1_val = vm.registers[inst.rs1 as usize];
+            let (dst_val, next_pc) = (0, cur_pc + 1);
+            vm.trace.push(bud_vm::Step {
+                pc: cur_pc,
+                next_pc,
+                instruction: inst,
+                src1_idx: inst.rs1,
+                src2_idx: inst.rs2,
+                dst_idx: inst.rd,
+                src1_val,
+                src2_val: 0,
+                dst_val,
+                registers: vm.registers,
+                memory_addr: None,
+                memory_val: None,
+                is_memory_write: false,
+                stack_pointer: 0,
+            });
+            vm.pc = next_pc;
+        }
+
+        let proof = Plonky3Adapter::prove(&vm.trace, vm.trace.len());
+        assert!(!Plonky3Adapter::verify(&proof, vm.trace.len()));
+    }
+
+    #[test]
+    fn rejects_invalid_pc_transition_trace() {
+        let program = vec![
+            inst(Opcode::Add, 1, 2, 3, 0),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+
+        let mut vm = Vm::new(64);
+        vm.run(&program);
+        
+        vm.trace[0].next_pc = 999;
+
+        let proof = Plonky3Adapter::prove(&vm.trace, vm.trace.len());
+        assert!(!Plonky3Adapter::verify(&proof, vm.trace.len()));
     }
 }
