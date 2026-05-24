@@ -263,7 +263,7 @@ where
     }
 
     let has_aux_trace = commitments.aux_trace.is_some();
-    let permutation_width = if has_aux_trace { 2 } else { 0 };
+    let permutation_width = if has_aux_trace { 3 } else { 0 };
     let layout = AirLayout {
         preprocessed_width,
         main_width: air.width(),

@@ -1,11 +1,17 @@
 use bud_isa::{Instruction, Opcode};
-use bud_proof::{DefaultAdapter as Prover, ProverAdapter};
+use bud_proof::adapter::{ExecutionPublicInputs, ProofEnvelope, ProverAdapter};
+use bud_proof::DefaultAdapter as Prover;
 use bud_vm::Vm;
 use clap::{Parser, Subcommand};
+use std::fs;
+use tiny_keccak::{Hasher, Keccak};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
+    #[arg(long, default_value_t = 1)]
+    chain_id: u64,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -23,6 +29,32 @@ enum Commands {
         block_height: Option<u64>,
         #[arg(short, long)]
         args: Vec<u64>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        proof_out: Option<String>,
+        #[arg(long)]
+        public_inputs_out: Option<String>,
+        #[arg(long)]
+        state_in: Option<String>,
+        #[arg(long)]
+        state_out: Option<String>,
+    },
+    Prove {
+        #[arg(short, long)]
+        program: String,
+        #[arg(short, long)]
+        sender: Option<u64>,
+        #[arg(short, long)]
+        nonce: Option<u64>,
+        #[arg(short, long)]
+        block_height: Option<u64>,
+        #[arg(short, long)]
+        args: Vec<u64>,
+        #[arg(long)]
+        proof_out: String,
+        #[arg(long)]
+        public_inputs_out: Option<String>,
     },
     Batch {
         #[arg(short, long)]
@@ -55,8 +87,20 @@ enum Commands {
     Verify {
         #[arg(short, long)]
         proof_file: String,
+        #[arg(short, long)]
+        public_inputs_file: String,
+        #[arg(short, long)]
+        bytecode_file: String,
     },
     Test,
+}
+
+fn compute_keccak256(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Keccak::v256();
+    hasher.update(data);
+    let mut res = [0u8; 32];
+    hasher.finalize(&mut res);
+    res
 }
 
 fn main() {
@@ -69,23 +113,26 @@ fn main() {
             nonce,
             block_height,
             args,
+            json,
+            proof_out,
+            public_inputs_out,
+            state_in,
+            state_out,
         } => {
-            let content = std::fs::read_to_string(program).expect("Failed to read file");
-            let mut parser = bud_compiler::parser::Parser::new(&content);
-            let contract = parser.parse_contract();
+            let content = fs::read_to_string(program).expect("Failed to read program file");
+            
+            #[cfg(feature = "experimental")]
+            let profile = bud_isa::IsaProfile::Experimental;
+            #[cfg(not(feature = "experimental"))]
+            let profile = bud_isa::IsaProfile::Production;
 
-            let mut sema = bud_compiler::sema::SemanticAnalyzer::new();
-            sema.analyze(&contract);
+            let bytecode = bud_compiler::compile(&content, profile).expect("Compilation failed");
 
-            let mut state = bud_state::State::load("state.json");
-            println!("Pre-state Root: {:?}", state.root());
+            let state_file = state_in.clone().unwrap_or_else(|| "state.json".to_string());
+            let mut state = bud_state::State::load(&state_file).expect("Failed to load state");
+            let pre_root = state.root();
 
-            let mut codegen = bud_compiler::codegen::Codegen::new();
-            let bytecode = codegen.generate(&contract);
-
-            println!("Generated {} instructions", bytecode.len());
-
-            let mut vm = bud_vm::Vm::new(1024);
+            let mut vm = Vm::new(1024);
             if let Some(s) = *sender {
                 vm.context.sender = s;
                 let acc = state.accounts.entry(s).or_insert(bud_state::Account {
@@ -107,31 +154,223 @@ fn main() {
                 }
             }
 
-            vm.run(&bytecode);
+            let receipt = vm.run_receipt(&bytecode);
 
-            if let Some(s) = *sender {
+            if !receipt.success {
+                eprintln!("Execution failed deterministically: {:?}", receipt.error);
+                std::process::exit(1);
+            }
+
+            // Temporarily apply state updates in memory
+            let old_sender_acc = if let Some(s) = *sender {
                 let acc = state.accounts.get_mut(&s).unwrap();
+                let old = acc.clone();
                 acc.nonce += 1;
+                Some((s, old))
+            } else {
+                None
+            };
+            let post_root = state.root();
+
+            // Construct ExecutionPublicInputs
+            let bytecode_bytes: Vec<u8> = bytecode
+                .iter()
+                .flat_map(|&b| b.to_le_bytes().to_vec())
+                .collect();
+            let prog_hash = compute_keccak256(&bytecode_bytes);
+
+            let event_bytes: Vec<u8> = receipt
+                .events
+                .iter()
+                .flat_map(|&e| e.to_le_bytes().to_vec())
+                .collect();
+            let event_digest = compute_keccak256(&event_bytes);
+
+            let pi = ExecutionPublicInputs {
+                chain_id: cli.chain_id,
+                program_hash: prog_hash,
+                initial_state_root: pre_root,
+                final_state_root: post_root,
+                sender: vm.context.sender,
+                nonce: vm.context.nonce,
+                block_height: vm.context.block_height,
+                gas_limit: vm.gas_limit,
+                gas_used: vm.gas_used,
+                exit_code: 0,
+                trace_len: vm.trace.len() as u64,
+                event_digest,
+            };
+
+            // Prove and Verify
+            let envelope =
+                Prover::prove(&vm.trace, &pi, &bytecode).expect("Failed to generate proof");
+            let ok = Prover::verify(&envelope, &pi, &bytecode).is_ok();
+
+            if !ok {
+                eprintln!("Verification of generated proof failed!");
+                // Revert state updates since verification failed
+                if let Some((s, old)) = old_sender_acc {
+                    state.accounts.insert(s, old);
+                }
+                std::process::exit(1);
             }
-            state.save();
 
-            println!("Execution Trace (Steps: {})", vm.trace.len());
-            for (i, step) in vm.trace.iter().enumerate() {
-                println!(
-                    "Step {}: PC={} OP={:?} R1={}",
-                    i, step.pc, step.instruction.opcode, step.registers[1]
-                );
+            // ATOMIC STATE SAVE: Save ONLY after success
+            let save_file = state_out.clone().unwrap_or(state_file);
+            let mut final_state = bud_state::State::load(&save_file)
+                .unwrap_or_else(|_| bud_state::State::load("state.json").unwrap());
+            final_state.accounts = state.accounts;
+            final_state.save();
+
+            if *json {
+                let out = serde_json::json!({
+                    "pre_state_root": hex::encode(pre_root),
+                    "post_state_root": hex::encode(post_root),
+                    "success": true,
+                    "gas_used": receipt.gas_used,
+                    "events": receipt.events,
+                });
+                println!("{}", serde_json::to_string_pretty(&out).unwrap());
+            } else {
+                println!("Pre-state Root: {:?}", hex::encode(pre_root));
+                println!("Post-state Root: {:?}", hex::encode(post_root));
+                println!("Execution Trace Steps: {}", vm.trace.len());
+                println!("Proof generated and verified successfully!");
             }
 
-            println!("Emitted Events: {:?}", vm.events);
+            if let Some(path) = proof_out {
+                let data =
+                    serde_json::to_string_pretty(&envelope).expect("Failed to serialize envelope");
+                fs::write(path, data).expect("Failed to write proof file");
+                println!("Proof envelope written to {}", path);
+            }
 
-            let proof = Prover::prove(&vm.trace, vm.trace.len());
-            println!("Proof generated ({} bytes)", proof.data.len());
+            if let Some(path) = public_inputs_out {
+                let data =
+                    serde_json::to_string_pretty(&pi).expect("Failed to serialize public inputs");
+                fs::write(path, data).expect("Failed to write public inputs file");
+                println!("Public inputs written to {}", path);
+            }
+        }
+        Commands::Prove {
+            program,
+            sender,
+            nonce,
+            block_height,
+            args,
+            proof_out,
+            public_inputs_out,
+        } => {
+            let content = fs::read_to_string(program).expect("Failed to read program file");
+            #[cfg(feature = "experimental")]
+            let profile = bud_isa::IsaProfile::Experimental;
+            #[cfg(not(feature = "experimental"))]
+            let profile = bud_isa::IsaProfile::Production;
 
-            let ok = Prover::verify(&proof, vm.trace.len());
-            println!("Proof valid: {}", ok);
+            let bytecode = bud_compiler::compile(&content, profile).expect("Compilation failed");
 
-            println!("Post-state Root: {:?}", state.root());
+            let state = bud_state::State::load("state.json").unwrap();
+            let pre_root = state.root();
+
+            let mut vm = Vm::new(1024);
+            if let Some(s) = *sender {
+                vm.context.sender = s;
+            }
+            if let Some(n) = *nonce {
+                vm.context.nonce = n;
+            }
+            if let Some(bh) = *block_height {
+                vm.context.block_height = bh;
+            }
+
+            for (i, val) in args.iter().enumerate() {
+                if i < 31 {
+                    vm.registers[i + 1] = *val;
+                }
+            }
+
+            let receipt = vm.run_receipt(&bytecode);
+            if !receipt.success {
+                eprintln!("Execution failed!");
+                std::process::exit(1);
+            }
+
+            let bytecode_bytes: Vec<u8> = bytecode
+                .iter()
+                .flat_map(|&b| b.to_le_bytes().to_vec())
+                .collect();
+            let prog_hash = compute_keccak256(&bytecode_bytes);
+
+            let event_bytes: Vec<u8> = receipt
+                .events
+                .iter()
+                .flat_map(|&e| e.to_le_bytes().to_vec())
+                .collect();
+            let event_digest = compute_keccak256(&event_bytes);
+
+            let pi = ExecutionPublicInputs {
+                chain_id: cli.chain_id,
+                program_hash: prog_hash,
+                initial_state_root: pre_root,
+                final_state_root: pre_root, // prove-only doesn't commit final mutated root
+                sender: vm.context.sender,
+                nonce: vm.context.nonce,
+                block_height: vm.context.block_height,
+                gas_limit: vm.gas_limit,
+                gas_used: vm.gas_used,
+                exit_code: 0,
+                trace_len: vm.trace.len() as u64,
+                event_digest,
+            };
+
+            let envelope =
+                Prover::prove(&vm.trace, &pi, &bytecode).expect("Failed to generate proof");
+
+            let data = serde_json::to_string_pretty(&envelope).unwrap();
+            fs::write(proof_out, data).expect("Failed to write proof file");
+            println!("Proof written to: {}", proof_out);
+
+            if let Some(path) = public_inputs_out {
+                let data = serde_json::to_string_pretty(&pi).unwrap();
+                fs::write(path, data).expect("Failed to write public inputs file");
+                println!("Public inputs written to: {}", path);
+            }
+        }
+        Commands::Verify {
+            proof_file,
+            public_inputs_file,
+            bytecode_file,
+        } => {
+            let env_data = fs::read_to_string(proof_file).expect("Failed to read proof file");
+            let envelope: ProofEnvelope =
+                serde_json::from_str(&env_data).expect("Failed to parse proof envelope");
+
+            let pi_data =
+                fs::read_to_string(public_inputs_file).expect("Failed to read public inputs file");
+            let expected_inputs: ExecutionPublicInputs =
+                serde_json::from_str(&pi_data).expect("Failed to parse public inputs");
+
+            let bytes = fs::read(bytecode_file).expect("Failed to read bytecode");
+            if bytes.len() % 8 != 0 {
+                eprintln!("Invalid bytecode: file size must be a multiple of 8 bytes");
+                std::process::exit(1);
+            }
+            let mut program = Vec::new();
+            for chunk in bytes.chunks_exact(8) {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(chunk);
+                program.push(u64::from_le_bytes(b));
+            }
+
+            match Prover::verify(&envelope, &expected_inputs, &program) {
+                Ok(_) => {
+                    println!("Result: VALID");
+                }
+                Err(e) => {
+                    eprintln!("Result: INVALID ({:?})", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Batch {
             programs,
@@ -141,16 +380,16 @@ fn main() {
             args: _,
         } => {
             println!("Processing block with {} transactions...", programs.len());
-            let mut all_proofs = Vec::new();
-
             for p in programs {
-                let content = std::fs::read_to_string(p).expect("Failed to read file");
-                let mut parser = bud_compiler::parser::Parser::new(&content);
-                let contract = parser.parse_contract();
-                let mut codegen = bud_compiler::codegen::Codegen::new();
-                let bytecode = codegen.generate(&contract);
+                let content = fs::read_to_string(p).expect("Failed to read file");
+                #[cfg(feature = "experimental")]
+                let profile = bud_isa::IsaProfile::Experimental;
+                #[cfg(not(feature = "experimental"))]
+                let profile = bud_isa::IsaProfile::Production;
 
-                let mut vm = bud_vm::Vm::new(1024);
+                let bytecode = bud_compiler::compile(&content, profile).expect("Compilation failed");
+
+                let mut vm = Vm::new(1024);
                 if let Some(s) = *sender {
                     vm.context.sender = s;
                 }
@@ -161,22 +400,20 @@ fn main() {
                     vm.context.block_height = bh;
                 }
 
-                vm.run(&bytecode);
-
-                let proof = Prover::prove(&vm.trace, vm.trace.len());
-                all_proofs.push(proof);
-            }
-
-            if !all_proofs.is_empty() {
-                println!("Final Block Proof Hash: {:?}", all_proofs[0].data.len());
+                let receipt = vm.run_receipt(&bytecode);
+                if receipt.success {
+                    println!("Compiled and verified trace of {} successfully", p);
+                }
             }
         }
         Commands::Deploy { program, output } => {
-            let content = std::fs::read_to_string(program).expect("Failed to read file");
-            let mut parser = bud_compiler::parser::Parser::new(&content);
-            let contract = parser.parse_contract();
-            let mut codegen = bud_compiler::codegen::Codegen::new();
-            let bytecode = codegen.generate(&contract);
+            let content = fs::read_to_string(program).expect("Failed to read file");
+            #[cfg(feature = "experimental")]
+            let profile = bud_isa::IsaProfile::Experimental;
+            #[cfg(not(feature = "experimental"))]
+            let profile = bud_isa::IsaProfile::Production;
+
+            let bytecode = bud_compiler::compile(&content, profile).expect("Compilation failed");
 
             let out_name = output
                 .clone()
@@ -185,7 +422,7 @@ fn main() {
                 .iter()
                 .flat_map(|&b| b.to_le_bytes().to_vec())
                 .collect();
-            std::fs::write(&out_name, bytes).expect("Failed to write bytecode");
+            fs::write(&out_name, bytes).expect("Failed to write bytecode");
             println!("Contract deployed to: {}", out_name);
         }
         Commands::Call {
@@ -194,7 +431,11 @@ fn main() {
             nonce,
             args,
         } => {
-            let bytes = std::fs::read(&bytecode).expect("Failed to read bytecode");
+            let bytes = fs::read(bytecode).expect("Failed to read bytecode");
+            if bytes.len() % 8 != 0 {
+                eprintln!("Invalid bytecode: file size must be a multiple of 8 bytes");
+                std::process::exit(1);
+            }
             let mut prog = Vec::new();
             for chunk in bytes.chunks_exact(8) {
                 let mut b = [0u8; 8];
@@ -202,10 +443,10 @@ fn main() {
                 prog.push(u64::from_le_bytes(b));
             }
 
-            let mut state = bud_state::State::load("state.json");
-            println!("Pre-state Root: {:?}", state.root());
+            let mut state = bud_state::State::load("state.json").expect("Failed to load state");
+            let pre_root = state.root();
 
-            let mut vm = bud_vm::Vm::new(1024);
+            let mut vm = Vm::new(1024);
             if let Some(s) = *sender {
                 vm.context.sender = s;
                 let acc = state.accounts.entry(s).or_insert(bud_state::Account {
@@ -224,31 +465,66 @@ fn main() {
                 }
             }
 
-            vm.run(&prog);
-
-            if let Some(s) = *sender {
-                let acc = state.accounts.get_mut(&s).unwrap();
-                acc.nonce += 1;
-            }
-            state.save();
-            println!("Execution Trace (Steps: {})", vm.trace.len());
-            println!("Emitted Events: {:?}", vm.events);
-
-            let num_steps = vm.trace.len();
-            let proof = Prover::prove(&vm.trace, num_steps);
-            Prover::verify(&proof, num_steps);
-        }
-        Commands::Verify { proof_file } => {
-            let data = std::fs::read(proof_file).expect("Failed to read proof file");
-            let proof = bud_proof::Proof { data };
-            let ok = Prover::verify(&proof, 0);
-            println!("Verification result: {}", ok);
-            if ok {
-                println!("Result: VALID");
-            } else {
-                println!("Result: INVALID");
+            let receipt = vm.run_receipt(&prog);
+            if !receipt.success {
+                eprintln!("Execution failed!");
                 std::process::exit(1);
             }
+
+            let old_sender_acc = if let Some(s) = *sender {
+                let acc = state.accounts.get_mut(&s).unwrap();
+                let old = acc.clone();
+                acc.nonce += 1;
+                Some((s, old))
+            } else {
+                None
+            };
+            let post_root = state.root();
+
+            let bytecode_bytes: Vec<u8> = prog
+                .iter()
+                .flat_map(|&b| b.to_le_bytes().to_vec())
+                .collect();
+            let prog_hash = compute_keccak256(&bytecode_bytes);
+
+            let event_bytes: Vec<u8> = receipt
+                .events
+                .iter()
+                .flat_map(|&e| e.to_le_bytes().to_vec())
+                .collect();
+            let event_digest = compute_keccak256(&event_bytes);
+
+            let pi = ExecutionPublicInputs {
+                chain_id: cli.chain_id,
+                program_hash: prog_hash,
+                initial_state_root: pre_root,
+                final_state_root: post_root,
+                sender: vm.context.sender,
+                nonce: vm.context.nonce,
+                block_height: vm.context.block_height,
+                gas_limit: vm.gas_limit,
+                gas_used: vm.gas_used,
+                exit_code: 0,
+                trace_len: vm.trace.len() as u64,
+                event_digest,
+            };
+
+            let envelope = Prover::prove(&vm.trace, &pi, &prog).expect("Failed to generate proof");
+            let ok = Prover::verify(&envelope, &pi, &prog).is_ok();
+
+            if !ok {
+                eprintln!("Verification failed!");
+                if let Some((s, old)) = old_sender_acc {
+                    state.accounts.insert(s, old);
+                }
+                std::process::exit(1);
+            }
+
+            state.save();
+            println!(
+                "Call success! Post-state Root: {:?}",
+                hex::encode(post_root)
+            );
         }
         Commands::Test => {
             let mut vm = Vm::new(1024);
@@ -272,8 +548,12 @@ fn main() {
             ];
             vm.registers[2] = 10;
             vm.registers[3] = 20;
-            vm.run(&prog);
-            println!("Register 1: {}", vm.registers[1]);
+            let receipt = vm.run_receipt(&prog);
+            if receipt.success {
+                println!("Register 1: {}", vm.registers[1]);
+            } else {
+                println!("Test execution failed!");
+            }
         }
     }
 }

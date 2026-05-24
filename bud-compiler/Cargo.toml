@@ -9,3 +9,6 @@ logos = "0.14"
 
 [dev-dependencies]
 bud-vm = { path = "../bud-vm" }
+
+[features]
+experimental = ["bud-isa/experimental"]

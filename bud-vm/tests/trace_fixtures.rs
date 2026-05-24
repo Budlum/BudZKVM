@@ -66,7 +66,7 @@ fn arithmetic_trace_fixture_stays_stable() {
     ];
 
     let mut vm = Vm::new(64);
-    vm.run(&program);
+    vm.run(&program).unwrap();
 
     assert_trace(
         &vm.trace,
@@ -167,7 +167,7 @@ fn control_flow_trace_fixture_stays_stable() {
     ];
 
     let mut vm = Vm::new(64);
-    vm.run(&program);
+    let _ = vm.run_receipt(&program);
 
     assert_trace(
         &vm.trace,
@@ -231,6 +231,7 @@ fn control_flow_trace_fixture_stays_stable() {
 }
 
 #[test]
+#[cfg(feature = "experimental")]
 fn memory_storage_and_event_trace_fixture_stays_stable() {
     let program = vec![
         inst(Opcode::Load, 1, 0, 0, 8),
@@ -244,7 +245,7 @@ fn memory_storage_and_event_trace_fixture_stays_stable() {
     ];
 
     let mut vm = Vm::new(32);
-    vm.run(&program);
+    vm.run(&program).unwrap();
 
     assert_trace(
         &vm.trace,

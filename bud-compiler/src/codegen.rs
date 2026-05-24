@@ -1,9 +1,19 @@
 use crate::ast::*;
-use bud_isa::{Instruction, Opcode};
+use crate::CompileError;
+use bud_isa::{Instruction, Opcode, IsaProfile};
 
+#[allow(dead_code)]
 pub struct Codegen {
     instructions: Vec<u64>,
     next_reg: u8,
+    profile: IsaProfile,
+    error: Option<CompileError>,
+}
+
+impl Default for Codegen {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Codegen {
@@ -11,18 +21,38 @@ impl Codegen {
         Self {
             instructions: Vec::new(),
             next_reg: 1,
+            profile: IsaProfile::Production,
+            error: None,
         }
     }
 
-    pub fn generate(&mut self, contract: &Contract) -> Vec<u64> {
+    pub fn new_with_profile(profile: IsaProfile) -> Self {
+        Self {
+            instructions: Vec::new(),
+            next_reg: 1,
+            profile,
+            error: None,
+        }
+    }
+
+    pub fn generate(&mut self, contract: &Contract) -> Result<Vec<u64>, CompileError> {
         for func in &contract.functions {
             self.generate_function(func, contract);
         }
         self.emit(Opcode::Halt, 0, 0, 0, 0);
-        self.instructions.clone()
+
+        if let Some(err) = self.error.take() {
+            Err(err)
+        } else {
+            Ok(self.instructions.clone())
+        }
     }
 
     fn generate_function(&mut self, func: &Function, contract: &Contract) {
+        if self.error.is_some() {
+            return;
+        }
+
         let mut scope = std::collections::HashMap::new();
         for param in &func.params {
             let reg = self.alloc_reg();
@@ -34,7 +64,7 @@ impl Codegen {
         }
 
         for stmt in &func.body {
-            self.generate_stmt(stmt, &mut scope, &storage_map, contract);
+            self.generate_stmt(stmt, &mut scope, &storage_map);
         }
     }
 
@@ -43,8 +73,11 @@ impl Codegen {
         stmt: &Stmt,
         scope: &mut std::collections::HashMap<String, u8>,
         storage: &std::collections::HashMap<String, i32>,
-        contract: &Contract,
     ) {
+        if self.error.is_some() {
+            return;
+        }
+
         match stmt {
             Stmt::Let(name, expr) => {
                 let reg = self.generate_expr(expr, scope, storage);
@@ -56,11 +89,33 @@ impl Codegen {
             }
             Stmt::StorageWrite(name, expr) => {
                 let reg = self.generate_expr(expr, scope, storage);
-                let slot = *storage.get(name).expect("Unknown storage variable");
+                let slot = match storage.get(name) {
+                    Some(s) => *s,
+                    None => {
+                        if self.error.is_none() {
+                            self.error = Some(CompileError::CodegenError(format!(
+                                "Unknown storage variable: {}",
+                                name
+                            )));
+                        }
+                        return;
+                    }
+                };
                 self.emit(Opcode::SWrite, 0, reg, 0, slot);
             }
             Stmt::MappingWrite(name, key, val) => {
-                let base_slot = *storage.get(name).expect("Unknown mapping");
+                let base_slot = match storage.get(name) {
+                    Some(s) => *s,
+                    None => {
+                        if self.error.is_none() {
+                            self.error = Some(CompileError::CodegenError(format!(
+                                "Unknown mapping variable: {}",
+                                name
+                            )));
+                        }
+                        return;
+                    }
+                };
                 let key_reg = self.generate_expr(key, scope, storage);
                 let val_reg = self.generate_expr(val, scope, storage);
 
@@ -74,7 +129,18 @@ impl Codegen {
             }
             Stmt::Assign(name, expr) => {
                 let reg = self.generate_expr(expr, scope, storage);
-                let target_reg = *scope.get(name).expect("Undefined variable");
+                let target_reg = match scope.get(name) {
+                    Some(r) => *r,
+                    None => {
+                        if self.error.is_none() {
+                            self.error = Some(CompileError::CodegenError(format!(
+                                "Undefined variable: {}",
+                                name
+                            )));
+                        }
+                        return;
+                    }
+                };
                 self.emit(Opcode::Add, target_reg, reg, 0, 0);
             }
             Stmt::If(cond, then_branch, else_branch) => {
@@ -84,7 +150,7 @@ impl Codegen {
 
                 if let Some(eb) = else_branch {
                     for s in eb {
-                        self.generate_stmt(s, scope, storage, contract);
+                        self.generate_stmt(s, scope, storage);
                     }
                 }
                 let jump_to_end_idx = self.instructions.len();
@@ -92,7 +158,7 @@ impl Codegen {
 
                 let then_start_idx = self.instructions.len();
                 for s in then_branch {
-                    self.generate_stmt(s, scope, storage, contract);
+                    self.generate_stmt(s, scope, storage);
                 }
                 let end_idx = self.instructions.len();
 
@@ -114,7 +180,7 @@ impl Codegen {
 
                 let body_start_idx = self.instructions.len();
                 for s in body {
-                    self.generate_stmt(s, scope, storage, contract);
+                    self.generate_stmt(s, scope, storage);
                 }
 
                 let current_idx = self.instructions.len();
@@ -143,7 +209,8 @@ impl Codegen {
                 let end_reg = self.generate_expr(end, scope, storage);
                 let loop_reg = self.alloc_reg();
                 self.emit(Opcode::Add, loop_reg, start_reg, 0, 0);
-                scope.insert(var.clone(), loop_reg);
+                let mut inner_scope = scope.clone();
+                inner_scope.insert(var.clone(), loop_reg);
 
                 let start_idx = self.instructions.len();
                 let cond_reg = self.alloc_reg();
@@ -157,7 +224,7 @@ impl Codegen {
 
                 let body_start_idx = self.instructions.len();
                 for s in body {
-                    self.generate_stmt(s, scope, storage, contract);
+                    self.generate_stmt(s, &mut inner_scope, storage);
                 }
 
                 let one_reg = self.alloc_reg();
@@ -200,8 +267,21 @@ impl Codegen {
     }
 
     fn patch_jump(&mut self, idx: usize, offset: i32) {
+        if self.error.is_some() {
+            return;
+        }
         let inst_raw = self.instructions[idx];
-        let mut inst = Instruction::decode(inst_raw);
+        let mut inst = match Instruction::decode_any(inst_raw) {
+            Ok(i) => i,
+            Err(_) => {
+                if self.error.is_none() {
+                    self.error = Some(CompileError::CodegenError(
+                        "patch_jump: failed to decode instruction".to_string(),
+                    ));
+                }
+                return;
+            }
+        };
         inst.imm = offset;
         self.instructions[idx] = inst.encode();
     }
@@ -212,21 +292,58 @@ impl Codegen {
         scope: &std::collections::HashMap<String, u8>,
         storage: &std::collections::HashMap<String, i32>,
     ) -> u8 {
+        if self.error.is_some() {
+            return 0;
+        }
+
         match expr {
             Expr::Int(val) => {
                 let reg = self.alloc_reg();
                 self.emit(Opcode::Load, reg, 0, 0, *val as i32);
                 reg
             }
-            Expr::Ident(name) => *scope.get(name).expect("Undefined variable in codegen"),
+            Expr::Ident(name) => match scope.get(name) {
+                Some(r) => *r,
+                None => {
+                    if self.error.is_none() {
+                        self.error = Some(CompileError::CodegenError(format!(
+                            "Undefined variable in codegen: {}",
+                            name
+                        )));
+                    }
+                    0
+                }
+            },
             Expr::StorageRead(name) => {
                 let reg = self.alloc_reg();
-                let slot = *storage.get(name).expect("Unknown storage variable");
+                let slot = match storage.get(name) {
+                    Some(s) => *s,
+                    None => {
+                        if self.error.is_none() {
+                            self.error = Some(CompileError::CodegenError(format!(
+                                "Unknown storage variable in codegen: {}",
+                                name
+                            )));
+                        }
+                        return 0;
+                    }
+                };
                 self.emit(Opcode::SRead, reg, 0, 0, slot);
                 reg
             }
             Expr::MappingRead(name, key) => {
-                let base_slot = *storage.get(name).expect("Unknown mapping");
+                let base_slot = match storage.get(name) {
+                    Some(s) => *s,
+                    None => {
+                        if self.error.is_none() {
+                            self.error = Some(CompileError::CodegenError(format!(
+                                "Unknown mapping in codegen: {}",
+                                name
+                            )));
+                        }
+                        return 0;
+                    }
+                };
                 let key_reg = self.generate_expr(key, scope, storage);
 
                 let base_reg = self.alloc_reg();
@@ -300,6 +417,30 @@ impl Codegen {
     }
 
     fn emit(&mut self, opcode: Opcode, rd: u8, rs1: u8, rs2: u8, imm: i32) {
+        if opcode.is_experimental() {
+            #[cfg(not(feature = "experimental"))]
+            {
+                if self.error.is_none() {
+                    self.error = Some(CompileError::ExperimentalOpcodeDisabled(format!(
+                        "Opcode {:?} is experimental and disabled in production",
+                        opcode
+                    )));
+                }
+                return;
+            }
+
+            #[cfg(feature = "experimental")]
+            if self.profile == IsaProfile::Production {
+                if self.error.is_none() {
+                    self.error = Some(CompileError::ExperimentalOpcodeDisabled(format!(
+                        "Opcode {:?} is experimental and disabled in production",
+                        opcode
+                    )));
+                }
+                return;
+            }
+        }
+
         let inst = Instruction {
             opcode,
             rd,

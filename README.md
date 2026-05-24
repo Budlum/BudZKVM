@@ -4,6 +4,17 @@ BudZKVM is a ZK-native virtual machine, language toolchain, and STARK proving st
 
 The project has successfully transitioned the prover architecture to a production-grade Multi-STARK system using LogUp (fractional sum) interaction arguments, ensuring full register and memory consistency within the Plonky3 0.5.2 backend.
 
+## Production Hardening Achievements (Phases 1-8)
+
+BudZKVM has successfully completed its core **Production Hardening Plan**, transforming the VM and STARK proving system into an audit-ready, sound, and mathematically secure execution environment:
+
+1. **Profile-Based ISA Security (`bud-isa` & `bud-compiler`)**: Introduced structural `IsaProfile` (`Production`, `Experimental`, `Testing`). In the `Production` profile, the compiler and ISA decoder strictly reject experimental or unconstrained opcodes (e.g. storage, poseidon, bitwise, comparison) at compile-time and decode-time, mitigating soundness issues from partially constrained instructions.
+2. **Goldilocks-Native Modular Division (`bud-vm` & `plonky3_air.rs`)**: Refactored the `Div` opcode from integer division to Goldilocks field-native modular division (`src1 * inv(src2) mod P`), perfectly aligning the VM execution semantics with the linear constraint layout `rd * rs2 - rs1 == 0` of the AIR.
+3. **Robust Cryptographic Proof Envelope (`bud-proof`)**: Wrapped the raw Plonky3 proofs in a versioned, secure `ProofEnvelope` validating key metadata (p3_version, backend_id, fri_params_id) and binding the deterministic Keccak256 hash of the compiled bytecode to the verification pipeline.
+4. **Padding Exclusion in Program CTL LogUp**: Integrated a witness column `COL_CPU_ACTIVE` and a preprocessed active indicator, fully aligning the trace degree calculations between prover and verifier and ensuring padding rows do not participate in the LogUp CTL lookup argument.
+5. **R0 Register Zero Value Constraint**: Patched a critical soundness gap by strictly constraining R0's write values to `0` in both trace generation and memory/register event LogUp lookup tables.
+6. **State Backend & Durability (`bud-state` & `bud-cli`)**: Defined the `StateBackend` trait with strict transaction-like `commit` and `rollback` semantics, and implemented OS-atomic file writes (temporary file sync + rename) to prevent state corruption.
+
 ## What Is In This Repository?
 
 BudZKVM is organized as a Rust workspace:

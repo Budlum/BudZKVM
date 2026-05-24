@@ -18,7 +18,7 @@ use crate::bud_stark::{
 };
 
 #[instrument(skip_all)]
-#[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
+#[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds, clippy::type_complexity)] // cfg not supported in where clauses?
 pub fn prove_with_preprocessed<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<p3_air::DebugConstraintBuilder<'a, Val<SC>>>,
@@ -81,7 +81,7 @@ where
         preprocessed_width,
         main_width: air.width(),
         num_public_values: air.num_public_values(),
-        permutation_width: if has_aux_trace { 2 } else { 0 },
+        permutation_width: if has_aux_trace { 3 } else { 0 },
         num_permutation_challenges: if has_aux_trace { 3 } else { 0 },
         ..Default::default()
     };
@@ -442,7 +442,7 @@ where
 }
 
 #[instrument(skip_all)]
-#[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
+#[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds, clippy::type_complexity)] // cfg not supported in where clauses?
 pub fn prove<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<p3_air::DebugConstraintBuilder<'a, Val<SC>>>,
@@ -502,7 +502,6 @@ where
     let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
 
     (0..quotient_size)
-        .into_iter()
         .step_by(PackedVal::<SC>::WIDTH)
         .flat_map(|i_start| {
             let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;

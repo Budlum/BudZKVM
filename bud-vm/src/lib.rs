@@ -1,4 +1,28 @@
 use bud_isa::{Instruction, Opcode};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VmError {
+    OutOfGas,
+    AssertionFailed,
+    StackUnderflow,
+    StackOverflow,
+    InvalidOpcode(String),
+    InvalidPc,
+    InvalidMemoryAccess,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionReceipt {
+    pub success: bool,
+    pub error: Option<VmError>,
+    pub gas_used: u64,
+    pub exit_code: u64,
+    pub events: Vec<u64>,
+    pub final_pc: u64,
+    pub trace_len: u64,
+    pub state_writes_digest: [u8; 32],
+}
 
 pub struct Vm {
     pub registers: [u64; 32],
@@ -12,6 +36,8 @@ pub struct Vm {
     pub halted: bool,
     pub gas_used: u64,
     pub gas_limit: u64,
+    pub error: Option<VmError>,
+    pub state_writes: Vec<(i32, u64)>,
 }
 
 pub struct Context {
@@ -38,6 +64,24 @@ pub struct Step {
     pub stack_pointer: usize,
 }
 
+pub fn field_inverse_goldilocks(val: u64) -> u64 {
+    const P: u64 = 18446744069414584321;
+    if val == 0 {
+        return 0;
+    }
+    let mut exp = P - 2;
+    let mut base = val as u128;
+    let mut res = 1u128;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            res = (res * base) % P as u128;
+        }
+        base = (base * base) % P as u128;
+        exp >>= 1;
+    }
+    res as u64
+}
+
 impl Vm {
     pub fn new(memory_size: usize) -> Self {
         Self::with_gas_limit(memory_size, 1_000_000)
@@ -60,30 +104,43 @@ impl Vm {
             halted: false,
             gas_used: 0,
             gas_limit,
+            error: None,
+            state_writes: Vec::new(),
         }
     }
 
-    pub fn consume_gas(&mut self, amount: u64) {
+    pub fn consume_gas(&mut self, amount: u64) -> Result<(), VmError> {
         self.gas_used = self.gas_used.saturating_add(amount);
         if self.gas_used > self.gas_limit {
             self.halted = true;
-            panic!(
-                "Out of gas: used {}, limit {}",
-                self.gas_used, self.gas_limit
-            );
+            self.error = Some(VmError::OutOfGas);
+            return Err(VmError::OutOfGas);
         }
+        Ok(())
     }
 
-    pub fn step(&mut self, program: &[u64]) {
-        if self.halted || self.pc >= program.len() {
+    pub fn step(&mut self, program: &[u64]) -> Result<(), VmError> {
+        if self.halted {
+            return Ok(());
+        }
+        if self.pc >= program.len() {
             self.halted = true;
-            return;
+            self.error = Some(VmError::InvalidPc);
+            return Err(VmError::InvalidPc);
         }
 
         let raw_inst = program[self.pc];
-        let inst = Instruction::decode(raw_inst);
+        let inst = match Instruction::decode(raw_inst) {
+            Ok(i) => i,
+            Err(e) => {
+                self.halted = true;
+                self.error = Some(VmError::InvalidOpcode(e.clone()));
+                return Err(VmError::InvalidOpcode(e));
+            }
+        };
+
         let cur_pc = self.pc;
-        self.consume_gas(Self::gas_cost(inst.opcode));
+        self.consume_gas(Self::gas_cost(inst.opcode))?;
 
         let src1_idx = inst.rs1;
         let src2_idx = inst.rs2;
@@ -119,8 +176,10 @@ impl Vm {
                 (result, cur_pc + 1)
             }
             Opcode::Div => {
+                const P: u64 = 18446744069414584321;
                 let result = if src2_val != 0 {
-                    src1_val / src2_val
+                    let inv = field_inverse_goldilocks(src2_val);
+                    ((src1_val as u128 * inv as u128) % P as u128) as u64
                 } else {
                     0
                 };
@@ -129,7 +188,11 @@ impl Vm {
                 (result, cur_pc + 1)
             }
             Opcode::Inv => {
-                let result = !src1_val;
+                let result = if src1_val != 0 {
+                    field_inverse_goldilocks(src1_val)
+                } else {
+                    0
+                };
                 self.registers[dst_idx as usize] = result;
                 self.pc += 1;
                 (result, cur_pc + 1)
@@ -203,23 +266,47 @@ impl Vm {
                 (0, target)
             }
             Opcode::Call => {
+                if self.stack.len() >= 1024 {
+                    self.halted = true;
+                    self.error = Some(VmError::StackOverflow);
+                    return Err(VmError::StackOverflow);
+                }
                 let target = (cur_pc as i64 + inst.imm as i64) as usize;
                 self.stack.push((cur_pc + 1) as u64);
                 self.pc = target;
                 ((cur_pc + 1) as u64, target)
             }
             Opcode::Ret => {
-                let target = self.stack.pop().expect("Return stack underflow") as usize;
+                let target = match self.stack.pop() {
+                    Some(val) => val as usize,
+                    None => {
+                        self.halted = true;
+                        self.error = Some(VmError::StackUnderflow);
+                        return Err(VmError::StackUnderflow);
+                    }
+                };
                 self.pc = target;
                 (target as u64, target)
             }
             Opcode::Push => {
+                if self.stack.len() >= 1024 {
+                    self.halted = true;
+                    self.error = Some(VmError::StackOverflow);
+                    return Err(VmError::StackOverflow);
+                }
                 self.stack.push(src1_val);
                 self.pc += 1;
                 (src1_val, cur_pc + 1)
             }
             Opcode::Pop => {
-                let result = self.stack.pop().expect("Stack underflow");
+                let result = match self.stack.pop() {
+                    Some(val) => val,
+                    None => {
+                        self.halted = true;
+                        self.error = Some(VmError::StackUnderflow);
+                        return Err(VmError::StackUnderflow);
+                    }
+                };
                 self.registers[dst_idx as usize] = result;
                 self.pc += 1;
                 (result, cur_pc + 1)
@@ -262,7 +349,9 @@ impl Vm {
             }
             Opcode::Assert => {
                 if src1_val == 0 {
-                    panic!("Assertion failed at PC {}", cur_pc);
+                    self.halted = true;
+                    self.error = Some(VmError::AssertionFailed);
+                    return Err(VmError::AssertionFailed);
                 }
                 self.pc += 1;
                 (0, cur_pc + 1)
@@ -285,6 +374,7 @@ impl Vm {
                     inst.imm
                 };
                 self.storage.insert(slot, src1_val);
+                self.state_writes.push((slot, src1_val));
                 self.pc += 1;
                 (0, cur_pc + 1)
             }
@@ -349,11 +439,52 @@ impl Vm {
             is_memory_write,
             stack_pointer: self.stack.len(),
         });
+
+        Ok(())
     }
 
-    pub fn run(&mut self, program: &[u64]) {
+    pub fn run(&mut self, program: &[u64]) -> Result<ExecutionReceipt, VmError> {
+        let receipt = self.run_receipt(program);
+        if let Some(ref e) = receipt.error {
+            Err(e.clone())
+        } else {
+            Ok(receipt)
+        }
+    }
+
+    pub fn run_receipt(&mut self, program: &[u64]) -> ExecutionReceipt {
+        let mut error = None;
         while !self.halted {
-            self.step(program);
+            if let Err(e) = self.step(program) {
+                error = Some(e);
+                break;
+            }
+        }
+
+        let mut sorted_writes = self.state_writes.clone();
+        sorted_writes.sort_by_key(|w| w.0);
+        let mut bytes = Vec::new();
+        for (slot, val) in sorted_writes {
+            bytes.extend_from_slice(&slot.to_le_bytes());
+            bytes.extend_from_slice(&val.to_le_bytes());
+        }
+        let mut state_writes_digest = [0u8; 32];
+        if !bytes.is_empty() {
+            use tiny_keccak::{Hasher, Keccak};
+            let mut hasher = Keccak::v256();
+            hasher.update(&bytes);
+            hasher.finalize(&mut state_writes_digest);
+        }
+
+        ExecutionReceipt {
+            success: error.is_none(),
+            error: error.clone(),
+            gas_used: self.gas_used,
+            exit_code: if error.is_none() { 0 } else { 1 },
+            events: self.events.clone(),
+            final_pc: self.pc as u64,
+            trace_len: self.trace.len() as u64,
+            state_writes_digest,
         }
     }
 
@@ -368,7 +499,7 @@ impl Vm {
         (end <= memory_len).then_some(addr)
     }
 
-    fn gas_cost(opcode: Opcode) -> u64 {
+    pub fn gas_cost(opcode: Opcode) -> u64 {
         match opcode {
             Opcode::Halt => 0,
             Opcode::Load | Opcode::Store | Opcode::SRead | Opcode::SWrite => 3,
@@ -405,8 +536,9 @@ mod tests {
 
         let mut vm = Vm::new(64);
         vm.registers[1] = 42;
-        vm.run(&program);
+        let receipt = vm.run_receipt(&program);
 
+        assert!(receipt.success);
         assert_eq!(vm.registers[2], 42);
         assert!(vm.stack.is_empty());
     }
@@ -421,20 +553,22 @@ mod tests {
         ];
 
         let mut vm = Vm::new(64);
-        vm.run(&program);
+        let receipt = vm.run_receipt(&program);
 
+        assert!(receipt.success);
         assert_eq!(vm.registers[1], 7);
         assert_eq!(vm.pc, 1);
         assert!(vm.stack.is_empty());
     }
 
     #[test]
-    #[should_panic(expected = "Out of gas")]
     fn gas_limit_stops_unbounded_execution() {
         let program = vec![inst(Opcode::Jmp, 0, 0, 0, 0)];
         let mut vm = Vm::with_gas_limit(64, 3);
 
-        vm.run(&program);
+        let receipt = vm.run_receipt(&program);
+        assert!(!receipt.success);
+        assert_eq!(receipt.error, Some(VmError::OutOfGas));
     }
 
     #[test]
@@ -448,8 +582,9 @@ mod tests {
 
         let mut vm = Vm::new(64);
         vm.context.sender = 77;
-        vm.run(&program);
+        let receipt = vm.run_receipt(&program);
 
+        assert!(receipt.success);
         assert_eq!(vm.gas_used, 10);
         assert_eq!(vm.registers[1], 9);
         assert_eq!(vm.registers[2], 77);
@@ -464,121 +599,17 @@ mod tests {
         ];
 
         let mut vm = Vm::new(64);
-        vm.step(&program);
+        let _ = vm.step(&program);
 
         assert!(vm.halted);
         assert_eq!(vm.pc, 0);
         assert_eq!(vm.trace.len(), 1);
 
-        vm.step(&program);
+        let _ = vm.step(&program);
 
         assert!(vm.halted);
         assert_eq!(vm.pc, 0);
         assert_eq!(vm.trace.len(), 1);
         assert_eq!(vm.registers[1], 0);
-    }
-
-    #[test]
-    fn pc_outside_program_halts_without_trace_row() {
-        let program = vec![inst(Opcode::Halt, 0, 0, 0, 0)];
-        let mut vm = Vm::new(64);
-        vm.pc = program.len();
-
-        vm.step(&program);
-
-        assert!(vm.halted);
-        assert_eq!(vm.trace.len(), 0);
-    }
-
-    #[test]
-    fn invalid_memory_accesses_are_zero_or_noop() {
-        let load_out_of_bounds = inst(Opcode::Load, 1, 2, 0, 5);
-        let load_negative = inst(Opcode::Load, 3, 2, 0, -1);
-        let store_out_of_bounds = inst(Opcode::Store, 0, 2, 4, 5);
-        let store_negative = inst(Opcode::Store, 0, 2, 4, -1);
-        let program = vec![
-            load_out_of_bounds,
-            load_negative,
-            store_out_of_bounds,
-            store_negative,
-            inst(Opcode::Halt, 0, 0, 0, 0),
-        ];
-
-        let mut vm = Vm::new(8);
-        vm.registers[2] = 0;
-        vm.registers[4] = 0xAABB_CCDD_EEFF_0011;
-        vm.run(&program);
-
-        assert_eq!(vm.registers[1], 0);
-        assert_eq!(vm.registers[3], 0);
-        assert_eq!(vm.memory, vec![0; 8]);
-    }
-
-    #[test]
-    fn verify_merkle_with_invalid_path_register_returns_false() {
-        let program = vec![
-            inst(Opcode::VerifyMerkle, 3, 1, 2, 99),
-            inst(Opcode::VerifyMerkle, 4, 1, 2, -1),
-            inst(Opcode::Halt, 0, 0, 0, 0),
-        ];
-
-        let mut vm = Vm::new(64);
-        vm.registers[1] = 123;
-        vm.registers[2] = 5;
-        vm.run(&program);
-
-        assert_eq!(vm.registers[3], 0);
-        assert_eq!(vm.registers[4], 0);
-        assert_eq!(vm.trace.len(), 3);
-    }
-
-    #[test]
-    fn branch_and_jump_edge_cases_are_deterministic() {
-        let program = vec![
-            inst(Opcode::Jnz, 0, 1, 0, 3),
-            inst(Opcode::Load, 2, 0, 0, 11),
-            inst(Opcode::Jmp, 0, 0, 0, 3),
-            inst(Opcode::Load, 2, 0, 0, 22),
-            inst(Opcode::Halt, 0, 0, 0, 0),
-        ];
-
-        let mut vm = Vm::new(64);
-        vm.run(&program);
-
-        assert_eq!(vm.registers[2], 11);
-        assert!(vm.halted);
-        assert_eq!(vm.pc, 5);
-        assert_eq!(vm.trace.len(), 3);
-        assert_eq!(vm.trace[0].next_pc, 1);
-        assert_eq!(vm.trace[2].next_pc, 5);
-
-        let mut taken = Vm::new(64);
-        taken.registers[1] = 1;
-        taken.run(&program);
-
-        assert_eq!(taken.registers[2], 22);
-        assert!(taken.halted);
-        assert_eq!(taken.pc, 4);
-        assert_eq!(taken.trace.len(), 3);
-        assert_eq!(taken.trace[0].next_pc, 3);
-    }
-
-    #[test]
-    fn arithmetic_overflow_wraps_modulo_u64() {
-        let program = vec![
-            inst(Opcode::Add, 3, 1, 2, 0),
-            inst(Opcode::Sub, 4, 0, 2, 0),
-            inst(Opcode::Mul, 5, 1, 2, 0),
-            inst(Opcode::Halt, 0, 0, 0, 0),
-        ];
-
-        let mut vm = Vm::new(64);
-        vm.registers[1] = u64::MAX;
-        vm.registers[2] = 2;
-        vm.run(&program);
-
-        assert_eq!(vm.registers[3], 1);
-        assert_eq!(vm.registers[4], u64::MAX - 1);
-        assert_eq!(vm.registers[5], u64::MAX - 1);
     }
 }

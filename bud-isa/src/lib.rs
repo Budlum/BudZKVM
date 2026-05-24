@@ -34,6 +34,56 @@ pub enum Opcode {
     VerifyMerkle = 0x1E,
 }
 
+impl Opcode {
+    pub fn is_experimental(&self) -> bool {
+        matches!(
+            self,
+            Opcode::And
+                | Opcode::Or
+                | Opcode::Xor
+                | Opcode::Not
+                | Opcode::Lt
+                | Opcode::Gt
+                | Opcode::Lte
+                | Opcode::Gte
+                | Opcode::Poseidon
+                | Opcode::SRead
+                | Opcode::SWrite
+                | Opcode::VerifyMerkle
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IsaProfile {
+    Production,
+    Experimental,
+    Testing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodeError {
+    InvalidOpcode(u8),
+    ExperimentalOpcodeDisabled(Opcode, IsaProfile),
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecodeError::InvalidOpcode(op) => write!(f, "Unknown opcode 0x{:02X}", op),
+            DecodeError::ExperimentalOpcodeDisabled(op, profile) => {
+                write!(
+                    f,
+                    "Opcode {:?} is experimental and disabled in {:?} profile",
+                    op, profile
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Instruction {
     pub opcode: Opcode,
@@ -53,7 +103,7 @@ impl Instruction {
         res
     }
 
-    pub fn decode(val: u64) -> Self {
+    pub fn decode_any(val: u64) -> Result<Self, DecodeError> {
         let op_u8 = (val & 0xFF) as u8;
         let opcode = match op_u8 {
             0x00 => Opcode::Halt,
@@ -87,19 +137,42 @@ impl Instruction {
             0x1C => Opcode::SWrite,
             0x1D => Opcode::Syscall,
             0x1E => Opcode::VerifyMerkle,
-            _ => Opcode::Halt,
+            _ => return Err(DecodeError::InvalidOpcode(op_u8)),
         };
         let rd = ((val >> 8) & 0x1F) as u8;
         let rs1 = ((val >> 13) & 0x1F) as u8;
         let rs2 = ((val >> 18) & 0x1F) as u8;
         let imm = ((val >> 23) & 0xFFFFFFFF) as i32;
 
-        Self {
+        Ok(Self {
             opcode,
             rd,
             rs1,
             rs2,
             imm,
+        })
+    }
+
+    pub fn decode_for_profile(val: u64, profile: IsaProfile) -> Result<Self, DecodeError> {
+        let inst = Self::decode_any(val)?;
+        if inst.opcode.is_experimental() {
+            #[cfg(not(feature = "experimental"))]
+            return Err(DecodeError::ExperimentalOpcodeDisabled(inst.opcode, profile));
+
+            #[cfg(feature = "experimental")]
+            if profile == IsaProfile::Production {
+                return Err(DecodeError::ExperimentalOpcodeDisabled(inst.opcode, profile));
+            }
         }
+        Ok(inst)
+    }
+
+    pub fn decode(val: u64) -> Result<Self, String> {
+        #[cfg(feature = "experimental")]
+        let profile = IsaProfile::Experimental;
+        #[cfg(not(feature = "experimental"))]
+        let profile = IsaProfile::Production;
+
+        Self::decode_for_profile(val, profile).map_err(|e| e.to_string())
     }
 }

@@ -32,6 +32,7 @@ BudZKVM artık yalnızca bağımsız CLI örnekleriyle değil, Budlum L1 `infra`
 5. [Bölüm 5: STARK, AIR ve Plonky3 (bud-proof)](05_stark_ve_plonky3.md)
 6. [Bölüm 6: Derleyici ve Ekosistem (bud-compiler & bud-cli)](06_compiler_ve_ekosistem.md)
 7. [Bölüm 7: Prover Stabilizasyonu ve Testler](07_prover_stabilizasyonu_ve_testler.md)
+8. [Bölüm 8: Üretime Hazırlık, Soundness ve Güvenlik Sertleştirmesi (Production Hardening & Soundness)](08_production_hardening_ve_soundness.md)
 
 ## Geliştirici Dokümantasyonu
 
