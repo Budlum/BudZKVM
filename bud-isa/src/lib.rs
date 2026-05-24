@@ -157,11 +157,17 @@ impl Instruction {
         let inst = Self::decode_any(val)?;
         if inst.opcode.is_experimental() {
             #[cfg(not(feature = "experimental"))]
-            return Err(DecodeError::ExperimentalOpcodeDisabled(inst.opcode, profile));
+            return Err(DecodeError::ExperimentalOpcodeDisabled(
+                inst.opcode,
+                profile,
+            ));
 
             #[cfg(feature = "experimental")]
             if profile == IsaProfile::Production {
-                return Err(DecodeError::ExperimentalOpcodeDisabled(inst.opcode, profile));
+                return Err(DecodeError::ExperimentalOpcodeDisabled(
+                    inst.opcode,
+                    profile,
+                ));
             }
         }
         Ok(inst)

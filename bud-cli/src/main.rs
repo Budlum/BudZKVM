@@ -120,7 +120,7 @@ fn main() {
             state_out,
         } => {
             let content = fs::read_to_string(program).expect("Failed to read program file");
-            
+
             #[cfg(feature = "experimental")]
             let profile = bud_isa::IsaProfile::Experimental;
             #[cfg(not(feature = "experimental"))]
@@ -387,7 +387,8 @@ fn main() {
                 #[cfg(not(feature = "experimental"))]
                 let profile = bud_isa::IsaProfile::Production;
 
-                let bytecode = bud_compiler::compile(&content, profile).expect("Compilation failed");
+                let bytecode =
+                    bud_compiler::compile(&content, profile).expect("Compilation failed");
 
                 let mut vm = Vm::new(1024);
                 if let Some(s) = *sender {

@@ -4,7 +4,6 @@ pub mod lexer;
 pub mod parser;
 pub mod sema;
 
-
 use bud_isa::IsaProfile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,12 +33,11 @@ impl std::error::Error for CompileError {}
 
 pub fn compile(source: &str, profile: IsaProfile) -> Result<Vec<u64>, CompileError> {
     let mut parser = parser::Parser::new(source);
-    
+
     // Parse contract, catching any recursive descent panics cleanly
-    let contract_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        parser.parse_contract()
-    }));
-    
+    let contract_result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.parse_contract()));
+
     let contract = match contract_result {
         Ok(c) => c,
         Err(err) => {
@@ -105,6 +103,9 @@ mod tests {
 
         let res = compile(source, IsaProfile::Production);
         assert!(res.is_err());
-        assert!(matches!(res.unwrap_err(), CompileError::ExperimentalOpcodeDisabled(_)));
+        assert!(matches!(
+            res.unwrap_err(),
+            CompileError::ExperimentalOpcodeDisabled(_)
+        ));
     }
 }

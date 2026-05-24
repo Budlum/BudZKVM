@@ -18,7 +18,11 @@ use crate::bud_stark::{
 };
 
 #[instrument(skip_all)]
-#[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds, clippy::type_complexity)] // cfg not supported in where clauses?
+#[allow(
+    clippy::multiple_bound_locations,
+    clippy::type_repetition_in_bounds,
+    clippy::type_complexity
+)] // cfg not supported in where clauses?
 pub fn prove_with_preprocessed<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<p3_air::DebugConstraintBuilder<'a, Val<SC>>>,
@@ -442,7 +446,11 @@ where
 }
 
 #[instrument(skip_all)]
-#[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds, clippy::type_complexity)] // cfg not supported in where clauses?
+#[allow(
+    clippy::multiple_bound_locations,
+    clippy::type_repetition_in_bounds,
+    clippy::type_complexity
+)] // cfg not supported in where clauses?
 pub fn prove<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<p3_air::DebugConstraintBuilder<'a, Val<SC>>>,

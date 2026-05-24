@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::CompileError;
-use bud_isa::{Instruction, Opcode, IsaProfile};
+use bud_isa::{Instruction, IsaProfile, Opcode};
 
 #[allow(dead_code)]
 pub struct Codegen {

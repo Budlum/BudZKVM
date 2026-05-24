@@ -1,7 +1,6 @@
 use crate::adapter::{
     ExecutionPublicInputs, ProofEnvelope, ProverAdapter, ProverError, VerifyError,
 };
-use tiny_keccak::{Hasher, Keccak};
 use crate::bud_stark::{
     prove_with_preprocessed, setup_preprocessed,
     verify_with_preprocessed as stark_verify_with_preprocessed, StarkConfig,
@@ -23,6 +22,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_util::log2_strict_usize;
 use std::boxed::Box;
+use tiny_keccak::{Hasher, Keccak};
 
 type MyExtensionField = BinomialExtensionField<Goldilocks, 2>;
 type MyHasher = SerializingHasher<Keccak256Hash>;
@@ -431,7 +431,6 @@ fn aux_trace_generator(
             let is_syscall = row[COL_IS_SYSCALL];
             let is_verify_merkle = row[COL_IS_VERIFY_MERKLE];
 
-
             let is_real_op = is_add
                 + is_sub
                 + is_mul
@@ -462,8 +461,6 @@ fn aux_trace_generator(
                 + is_poseidon
                 + is_syscall
                 + is_verify_merkle;
-
-
 
             let clk = row[COL_CLK];
             let pc = row[COL_PC];

@@ -91,7 +91,11 @@ impl<F: p3_field::Field> BaseAir<F> for BudAir {
         for i in 0..degree {
             let pc = i as u64;
             let inst = self.program.get(i).copied().unwrap_or(0);
-            let active = if i < self.program.len() { F::ONE } else { F::ZERO };
+            let active = if i < self.program.len() {
+                F::ONE
+            } else {
+                F::ZERO
+            };
             values[i * 3] = F::from_u64(pc);
             values[i * 3 + 1] = F::from_u64(inst);
             values[i * 3 + 2] = active;

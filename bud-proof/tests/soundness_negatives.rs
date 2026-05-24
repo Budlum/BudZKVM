@@ -1,6 +1,6 @@
+use bud_isa::{Instruction, Opcode};
 use bud_proof::plonky3_air::{BudAir, TRACE_WIDTH};
 use bud_vm::Vm;
-use bud_isa::{Instruction, Opcode};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 
@@ -34,7 +34,8 @@ fn test_tampered_pc_violates_constraints() {
         values[row_start + 1] = Goldilocks::new(999); // TAMPERED PC! (instead of step.pc)
         values[row_start + 2] = Goldilocks::new(step.instruction.opcode as u64);
         values[row_start + 3] = Goldilocks::new(step.dst_idx as u64);
-        values[row_start + 11 + step.instruction.opcode as usize] = Goldilocks::new(1); // selector
+        values[row_start + 11 + step.instruction.opcode as usize] = Goldilocks::new(1);
+        // selector
     }
 
     let matrix = RowMajorMatrix::new(values, TRACE_WIDTH);
@@ -42,7 +43,7 @@ fn test_tampered_pc_violates_constraints() {
         num_steps: vm.trace.len(),
         program,
     };
-    
+
     // Evaluating constraints on tampered trace should fail/panic!
     let res = std::panic::catch_unwind(|| {
         let public_inputs = vec![Goldilocks::new(0); 48];
