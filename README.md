@@ -14,6 +14,9 @@ BudZKVM has successfully completed its core **Production Hardening Plan**, trans
 4. **Padding Exclusion in Program CTL LogUp**: Integrated a witness column `COL_CPU_ACTIVE` and a preprocessed active indicator, fully aligning the trace degree calculations between prover and verifier and ensuring padding rows do not participate in the LogUp CTL lookup argument.
 5. **R0 Register Zero Value Constraint**: Patched a critical soundness gap by strictly constraining R0's write values to `0` in both trace generation and memory/register event LogUp lookup tables.
 6. **State Backend & Durability (`bud-state` & `bud-cli`)**: Defined the `StateBackend` trait with strict transaction-like `commit` and `rollback` semantics, and implemented OS-atomic file writes (temporary file sync + rename) to prevent state corruption.
+7. **64-Depth Sparse Merkle Tree & Accounts Encapsulation (`bud-state`)**: Replaced flat hash state roots with a secure 64-depth SMT over account IDs. Exposes $O(\log n)$ inclusion and non-membership proofs (`get_account_proof`, `verify_account_proof`). Completely encapsulated the accounts database by making the HashMap private, forcing all state mutations through transactional `StateBackend` APIs.
+8. **Pratt Operator Precedence & Panic-Free Parsing (`bud-compiler`)**: Upgraded the recursive descent parser to support mathematical precedence (+, - before *, /), nested parenthesis expression grouping, hexadecimal literals (`0x...`), and comments skipping (`//` and `/* ... */`). Completely replaced panic-based syntax validation with idiomatic `Result<T, CompileError>` propagation.
+9. **Transactional Pipeline & Batch Subcommand (`bud-cli`)**: Enforced transaction boundaries (`begin_transaction`, `rollback`, `commit`) on CLI `run_pipeline` executions to preserve nonces and state consistency upon verification failures. Completed the sequential `Batch` CLI command executing and proving a series of programs over a single shared state.
 
 ## What Is In This Repository?
 
@@ -191,7 +194,7 @@ Status: usable, needs language-hardening work.
 - [x] Support loops and basic control-flow patterns used by current examples.
 - [ ] Document the BudL grammar in the docs book.
 - [ ] Add compiler snapshot tests for representative programs.
-- [ ] Add negative tests for syntax and semantic errors.
+- [x] Add negative tests for syntax and semantic errors.
 - [ ] Improve diagnostic messages with source spans.
 - [ ] Define integer, field, boolean, and memory semantics precisely.
 - [ ] Add structs or records if they remain aligned with the ZK-friendly execution model.
@@ -280,7 +283,7 @@ Status: usable, needs polish and stronger UX.
 - [x] Provide CLI flows for running, deploying, and calling Bud programs.
 - [x] Connect CLI calls to proof generation and verification.
 - [x] Support file-backed state in local workflows.
-- [ ] Add `bud-cli prove` and `bud-cli verify` as explicit commands if they are not already first-class.
+- [x] Add `bud-cli prove` and `bud-cli verify` as explicit commands if they are not already first-class.
 - [ ] Add command output modes: human-readable, JSON, and quiet.
 - [ ] Add better error messages for compile, VM, proof, and state failures.
 - [ ] Add examples for deploying, calling, and verifying in the README.
@@ -296,11 +299,11 @@ Status: partly wired, needs protocol-level clarity.
 - [x] Maintain file-backed state for local execution.
 - [x] Track account-like state and nonce-related behavior.
 - [x] Support BudZKVM as an execution backend concept for contract-call style flows.
-- [ ] Specify exactly which state fields are committed into public inputs.
-- [ ] Bind initial state root and final state root into the proof.
-- [ ] Bind sender, arguments, bytecode hash, gas limit, and execution result into the proof.
-- [ ] Add replay-protection tests around nonce behavior.
-- [ ] Add state transition tests where invalid final state must fail verification.
+- [x] Specify exactly which state fields are committed into public inputs.
+- [x] Bind initial state root and final state root into the proof.
+- [x] Bind sender, arguments, bytecode hash, gas limit, and execution result into the proof.
+- [x] Add replay-protection tests around nonce behavior.
+- [x] Add state transition tests where invalid final state must fail verification.
 - [ ] Add L1-facing proof verification API boundaries.
 - [ ] Add documentation for how BudZKVM execution maps to a transaction lifecycle.
 - [ ] Define how proof failures are surfaced to the node layer.
