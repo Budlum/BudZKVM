@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::lexer::Token;
+use crate::CompileError;
 use logos::Logos;
 
 pub struct Parser<'a> {
@@ -34,22 +35,26 @@ impl<'a> Parser<'a> {
         t
     }
 
-    fn expect(&mut self, expected: Token) {
+    fn expect(&mut self, expected: Token) -> Result<(), CompileError> {
         let t = self.consume();
         if t != expected {
-            panic!("Expected {:?}, found {:?}", expected, t);
+            return Err(CompileError::ParserError(format!(
+                "Expected {:?}, found {:?}",
+                expected, t
+            )));
         }
+        Ok(())
     }
 
-    pub fn parse_contract(&mut self) -> Contract {
-        self.expect(Token::Contract);
+    pub fn parse_contract(&mut self) -> Result<Contract, CompileError> {
+        self.expect(Token::Contract)?;
         let name = if let Token::Ident(name) = self.consume() {
             name
         } else {
-            panic!("Expected contract name");
+            return Err(CompileError::ParserError("Expected contract name".to_string()));
         };
 
-        self.expect(Token::BraceOpen);
+        self.expect(Token::BraceOpen)?;
 
         let mut functions = Vec::new();
         let mut storage = Vec::new();
@@ -59,87 +64,87 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 Token::Storage => {
                     self.consume();
-                    self.expect(Token::BraceOpen);
+                    self.expect(Token::BraceOpen)?;
                     while self.peek() != &Token::BraceClose {
                         let name = if let Token::Ident(name) = self.consume() {
                             name
                         } else {
-                            panic!("Expected name")
+                            return Err(CompileError::ParserError("Expected name".to_string()));
                         };
-                        self.expect(Token::Colon);
+                        self.expect(Token::Colon)?;
                         let ty = if let Token::Ident(ty) = self.consume() {
                             if ty == "Map" {
-                                self.expect(Token::Lt);
+                                self.expect(Token::Lt)?;
                                 let k = if let Token::Ident(k) = self.consume() {
                                     k
                                 } else {
-                                    panic!("Ex")
+                                    return Err(CompileError::ParserError("Expected map key type".to_string()));
                                 };
-                                self.expect(Token::Comma);
+                                self.expect(Token::Comma)?;
                                 let v = if let Token::Ident(v) = self.consume() {
                                     v
                                 } else {
-                                    panic!("Ex")
+                                    return Err(CompileError::ParserError("Expected map value type".to_string()));
                                 };
-                                self.expect(Token::Gt);
+                                self.expect(Token::Gt)?;
                                 format!("Map<{},{}>", k, v)
                             } else {
                                 ty
                             }
                         } else {
-                            panic!("Expected type")
+                            return Err(CompileError::ParserError("Expected type".to_string()));
                         };
-                        self.expect(Token::Comma);
+                        self.expect(Token::Comma)?;
                         storage.push(StorageField { name, ty });
                     }
-                    self.expect(Token::BraceClose);
+                    self.expect(Token::BraceClose)?;
                 }
                 Token::Struct => {
                     self.consume();
                     let name = if let Token::Ident(name) = self.consume() {
                         name
                     } else {
-                        panic!("Expected name")
+                        return Err(CompileError::ParserError("Expected name".to_string()));
                     };
-                    self.expect(Token::BraceOpen);
+                    self.expect(Token::BraceOpen)?;
                     let mut fields = Vec::new();
                     while self.peek() != &Token::BraceClose {
                         let fname = if let Token::Ident(n) = self.consume() {
                             n
                         } else {
-                            panic!("Expected name")
+                            return Err(CompileError::ParserError("Expected name".to_string()));
                         };
-                        self.expect(Token::Colon);
+                        self.expect(Token::Colon)?;
                         let fty = if let Token::Ident(t) = self.consume() {
                             t
                         } else {
-                            panic!("Expected type")
+                            return Err(CompileError::ParserError("Expected type".to_string()));
                         };
-                        self.expect(Token::Comma);
+                        self.expect(Token::Comma)?;
                         fields.push(StorageField {
                             name: fname,
                             ty: fty,
                         });
                     }
-                    self.expect(Token::BraceClose);
+                    self.expect(Token::BraceClose)?;
                     structs.push(Struct { name, fields });
                 }
                 _ => {
-                    functions.push(self.parse_function());
+                    functions.push(self.parse_function()?);
                 }
             }
         }
-        self.expect(Token::BraceClose);
+        self.expect(Token::BraceClose)?;
 
-        Contract {
+        Ok(Contract {
             name,
             storage,
             structs,
             functions,
-        }
+        })
     }
 
-    fn parse_function(&mut self) -> Function {
+    fn parse_function(&mut self) -> Result<Function, CompileError> {
         let is_pub = if self.peek() == &Token::Pub {
             self.consume();
             true
@@ -147,204 +152,204 @@ impl<'a> Parser<'a> {
             false
         };
 
-        self.expect(Token::Fn);
+        self.expect(Token::Fn)?;
         let name = if let Token::Ident(name) = self.consume() {
             name
         } else {
-            panic!("Expected function name");
+            return Err(CompileError::ParserError("Expected function name".to_string()));
         };
 
-        self.expect(Token::ParenOpen);
+        self.expect(Token::ParenOpen)?;
         let mut params = Vec::new();
         while self.peek() != &Token::ParenClose {
             let name = if let Token::Ident(name) = self.consume() {
                 name
             } else {
-                panic!("Expected param name")
+                return Err(CompileError::ParserError("Expected param name".to_string()));
             };
-            self.expect(Token::Colon);
+            self.expect(Token::Colon)?;
             let ty = if let Token::Ident(ty) = self.consume() {
                 ty
             } else {
-                panic!("Expected param type")
+                return Err(CompileError::ParserError("Expected param type".to_string()));
             };
             params.push(Param { name, ty });
             if self.peek() == &Token::Comma {
                 self.consume();
             }
         }
-        self.expect(Token::ParenClose);
+        self.expect(Token::ParenClose)?;
 
-        self.expect(Token::BraceOpen);
+        self.expect(Token::BraceOpen)?;
         let mut body = Vec::new();
         while self.peek() != &Token::BraceClose {
-            body.push(self.parse_stmt());
+            body.push(self.parse_stmt()?);
         }
-        self.expect(Token::BraceClose);
+        self.expect(Token::BraceClose)?;
 
-        Function {
+        Ok(Function {
             name,
             params,
             body,
             is_pub,
-        }
+        })
     }
 
-    fn parse_stmt(&mut self) -> Stmt {
+    fn parse_stmt(&mut self) -> Result<Stmt, CompileError> {
         match self.peek() {
             Token::Let => {
                 self.consume();
                 let name = if let Token::Ident(name) = self.consume() {
                     name
                 } else {
-                    panic!("Expected identifier after let");
+                    return Err(CompileError::ParserError("Expected identifier after let".to_string()));
                 };
-                self.expect(Token::Assign);
-                let expr = self.parse_expr();
-                self.expect(Token::Semicolon);
-                Stmt::Let(name, expr)
+                self.expect(Token::Assign)?;
+                let expr = self.parse_expr()?;
+                self.expect(Token::Semicolon)?;
+                Ok(Stmt::Let(name, expr))
             }
             Token::Constrain => {
                 self.consume();
-                self.expect(Token::ParenOpen);
-                let expr = self.parse_expr();
-                self.expect(Token::ParenClose);
-                self.expect(Token::Semicolon);
-                Stmt::Constrain(expr)
+                self.expect(Token::ParenOpen)?;
+                let expr = self.parse_expr()?;
+                self.expect(Token::ParenClose)?;
+                self.expect(Token::Semicolon)?;
+                Ok(Stmt::Constrain(expr))
             }
             Token::Storage => {
                 self.consume();
-                self.expect(Token::Colon);
-                self.expect(Token::Colon);
+                self.expect(Token::Colon)?;
+                self.expect(Token::Colon)?;
                 let name = if let Token::Ident(name) = self.consume() {
                     name
                 } else {
-                    panic!("Expected name")
+                    return Err(CompileError::ParserError("Expected name".to_string()));
                 };
-                self.expect(Token::Assign);
-                let expr = self.parse_expr();
-                self.expect(Token::Semicolon);
-                Stmt::StorageWrite(name, expr)
+                self.expect(Token::Assign)?;
+                let expr = self.parse_expr()?;
+                self.expect(Token::Semicolon)?;
+                Ok(Stmt::StorageWrite(name, expr))
             }
             Token::If => {
                 self.consume();
-                self.expect(Token::ParenOpen);
-                let cond = self.parse_expr();
-                self.expect(Token::ParenClose);
-                self.expect(Token::BraceOpen);
+                self.expect(Token::ParenOpen)?;
+                let cond = self.parse_expr()?;
+                self.expect(Token::ParenClose)?;
+                self.expect(Token::BraceOpen)?;
                 let mut then_branch = Vec::new();
                 while self.peek() != &Token::BraceClose {
-                    then_branch.push(self.parse_stmt());
+                    then_branch.push(self.parse_stmt()?);
                 }
-                self.expect(Token::BraceClose);
+                self.expect(Token::BraceClose)?;
 
                 let mut else_branch = None;
                 if self.peek() == &Token::Else {
                     self.consume();
-                    self.expect(Token::BraceOpen);
+                    self.expect(Token::BraceOpen)?;
                     let mut eb = Vec::new();
                     while self.peek() != &Token::BraceClose {
-                        eb.push(self.parse_stmt());
+                        eb.push(self.parse_stmt()?);
                     }
-                    self.expect(Token::BraceClose);
+                    self.expect(Token::BraceClose)?;
                     else_branch = Some(eb);
                 }
-                Stmt::If(cond, then_branch, else_branch)
+                Ok(Stmt::If(cond, then_branch, else_branch))
             }
             Token::While => {
                 self.consume();
-                self.expect(Token::ParenOpen);
-                let cond = self.parse_expr();
-                self.expect(Token::ParenClose);
-                self.expect(Token::BraceOpen);
+                self.expect(Token::ParenOpen)?;
+                let cond = self.parse_expr()?;
+                self.expect(Token::ParenClose)?;
+                self.expect(Token::BraceOpen)?;
                 let mut body = Vec::new();
                 while self.peek() != &Token::BraceClose {
-                    body.push(self.parse_stmt());
+                    body.push(self.parse_stmt()?);
                 }
-                self.expect(Token::BraceClose);
-                Stmt::While(cond, body)
+                self.expect(Token::BraceClose)?;
+                Ok(Stmt::While(cond, body))
             }
             Token::For => {
                 self.consume();
                 let var = if let Token::Ident(name) = self.consume() {
                     name
                 } else {
-                    panic!("Expected loop variable after for");
+                    return Err(CompileError::ParserError("Expected loop variable after for".to_string()));
                 };
-                self.expect(Token::In);
-                let start = self.parse_expr();
-                self.expect(Token::DotDot);
-                let end = self.parse_expr();
-                self.expect(Token::BraceOpen);
+                self.expect(Token::In)?;
+                let start = self.parse_expr()?;
+                self.expect(Token::DotDot)?;
+                let end = self.parse_expr()?;
+                self.expect(Token::BraceOpen)?;
                 let mut body = Vec::new();
                 while self.peek() != &Token::BraceClose {
-                    body.push(self.parse_stmt());
+                    body.push(self.parse_stmt()?);
                 }
-                self.expect(Token::BraceClose);
-                Stmt::For {
+                self.expect(Token::BraceClose)?;
+                Ok(Stmt::For {
                     var,
                     start,
                     end,
                     body,
-                }
+                })
             }
             Token::Return => {
                 self.consume();
                 let expr = if self.peek() != &Token::Semicolon {
-                    Some(self.parse_expr())
+                    Some(self.parse_expr()?)
                 } else {
                     None
                 };
-                self.expect(Token::Semicolon);
-                Stmt::Return(expr)
+                self.expect(Token::Semicolon)?;
+                Ok(Stmt::Return(expr))
             }
             Token::Ident(name) if name == "emit" => {
                 self.consume();
                 let event_name = if let Token::Ident(en) = self.consume() {
                     en
                 } else {
-                    panic!("Expected event name")
+                    return Err(CompileError::ParserError("Expected event name".to_string()));
                 };
-                self.expect(Token::ParenOpen);
+                self.expect(Token::ParenOpen)?;
                 let mut args = Vec::new();
                 while self.peek() != &Token::ParenClose {
-                    args.push(self.parse_expr());
+                    args.push(self.parse_expr()?);
                     if self.peek() == &Token::Comma {
                         self.consume();
                     }
                 }
-                self.expect(Token::ParenClose);
-                self.expect(Token::Semicolon);
-                Stmt::Emit(event_name, args)
+                self.expect(Token::ParenClose)?;
+                self.expect(Token::Semicolon)?;
+                Ok(Stmt::Emit(event_name, args))
             }
             Token::Ident(name) => {
                 let name = name.clone();
                 self.consume();
                 if self.peek() == &Token::BracketOpen {
                     self.consume();
-                    let key = self.parse_expr();
-                    self.expect(Token::BracketClose);
-                    self.expect(Token::Assign);
-                    let val = self.parse_expr();
-                    self.expect(Token::Semicolon);
-                    Stmt::MappingWrite(name, key, val)
+                    let key = self.parse_expr()?;
+                    self.expect(Token::BracketClose)?;
+                    self.expect(Token::Assign)?;
+                    let val = self.parse_expr()?;
+                    self.expect(Token::Semicolon)?;
+                    Ok(Stmt::MappingWrite(name, key, val))
                 } else {
-                    self.expect(Token::Assign);
-                    let expr = self.parse_expr();
-                    self.expect(Token::Semicolon);
-                    Stmt::Assign(name, expr)
+                    self.expect(Token::Assign)?;
+                    let expr = self.parse_expr()?;
+                    self.expect(Token::Semicolon)?;
+                    Ok(Stmt::Assign(name, expr))
                 }
             }
             _ => {
-                let expr = self.parse_expr();
-                self.expect(Token::Semicolon);
-                Stmt::Expr(expr)
+                let expr = self.parse_expr()?;
+                self.expect(Token::Semicolon)?;
+                Ok(Stmt::Expr(expr))
             }
         }
     }
 
-    fn parse_expr(&mut self) -> Expr {
-        let mut left = self.parse_arith();
+    fn parse_expr(&mut self) -> Result<Expr, CompileError> {
+        let mut left = self.parse_arith()?;
 
         while matches!(
             self.peek(),
@@ -359,100 +364,129 @@ impl<'a> Parser<'a> {
                 Token::Gte => BinOp::Gte,
                 _ => unreachable!(),
             };
-            let right = self.parse_arith();
+            let right = self.parse_arith()?;
             left = Expr::Binary(Box::new(left), op, Box::new(right));
         }
 
-        left
+        Ok(left)
     }
 
-    fn parse_arith(&mut self) -> Expr {
-        let mut left = self.parse_primary();
+    fn parse_arith(&mut self) -> Result<Expr, CompileError> {
+        let mut left = self.parse_term()?;
 
         while matches!(
             self.peek(),
-            Token::Plus | Token::Minus | Token::Star | Token::Slash
+            Token::Plus | Token::Minus
         ) {
             let op = match self.consume() {
                 Token::Plus => BinOp::Add,
                 Token::Minus => BinOp::Sub,
+                _ => unreachable!(),
+            };
+            let right = self.parse_term()?;
+            left = Expr::Binary(Box::new(left), op, Box::new(right));
+        }
+
+        Ok(left)
+    }
+
+    fn parse_term(&mut self) -> Result<Expr, CompileError> {
+        let mut left = self.parse_primary()?;
+
+        while matches!(
+            self.peek(),
+            Token::Star | Token::Slash
+        ) {
+            let op = match self.consume() {
                 Token::Star => BinOp::Mul,
                 Token::Slash => BinOp::Div,
                 _ => unreachable!(),
             };
-            let right = self.parse_primary();
+            let right = self.parse_primary()?;
             left = Expr::Binary(Box::new(left), op, Box::new(right));
         }
 
-        left
+        Ok(left)
     }
 
-    fn parse_primary(&mut self) -> Expr {
+    fn parse_primary(&mut self) -> Result<Expr, CompileError> {
         match self.consume() {
-            Token::Int(val) => Expr::Int(val),
+            Token::Int(val) => Ok(Expr::Int(val)),
+            Token::Hex(val) => {
+                let s = val.strip_prefix("0x").unwrap_or(&val);
+                let num = u64::from_str_radix(s, 16).map_err(|e| {
+                    CompileError::ParserError(format!("Invalid hex literal {}: {}", val, e))
+                })?;
+                Ok(Expr::Int(num))
+            }
+            Token::ParenOpen => {
+                let expr = self.parse_expr()?;
+                self.expect(Token::ParenClose)?;
+                Ok(expr)
+            }
             Token::Ident(name) => {
                 if name == "poseidon" {
-                    self.expect(Token::ParenOpen);
+                    self.expect(Token::ParenOpen)?;
                     let mut args = Vec::new();
                     while self.peek() != &Token::ParenClose {
-                        args.push(self.parse_expr());
+                        args.push(self.parse_expr()?);
                         if self.peek() == &Token::Comma {
                             self.consume();
                         }
                     }
-                    self.expect(Token::ParenClose);
-                    Expr::Call("poseidon".to_string(), args)
+                    self.expect(Token::ParenClose)?;
+                    Ok(Expr::Call("poseidon".to_string(), args))
                 } else if name == "msg" {
-                    self.expect(Token::Colon);
-                    self.expect(Token::Colon);
+                    self.expect(Token::Colon)?;
+                    self.expect(Token::Colon)?;
                     let field = if let Token::Ident(f) = self.consume() {
                         f
                     } else {
-                        panic!("Expected field")
+                        return Err(CompileError::ParserError("Expected field".to_string()));
                     };
-                    self.expect(Token::ParenOpen);
-                    self.expect(Token::ParenClose);
-                    Expr::Call(format!("msg::{}", field), Vec::new())
+                    self.expect(Token::ParenOpen)?;
+                    self.expect(Token::ParenClose)?;
+                    Ok(Expr::Call(format!("msg::{}", field), Vec::new()))
                 } else if name == "block" {
-                    self.expect(Token::Colon);
-                    self.expect(Token::Colon);
+                    self.expect(Token::Colon)?;
+                    self.expect(Token::Colon)?;
                     let field = if let Token::Ident(f) = self.consume() {
                         f
                     } else {
-                        panic!("Expected field")
+                        return Err(CompileError::ParserError("Expected field".to_string()));
                     };
-                    self.expect(Token::ParenOpen);
-                    self.expect(Token::ParenClose);
-                    Expr::Call(format!("block::{}", field), Vec::new())
+                    self.expect(Token::ParenOpen)?;
+                    self.expect(Token::ParenClose)?;
+                    Ok(Expr::Call(format!("block::{}", field), Vec::new()))
                 } else if name == "verify_merkle_proof" {
-                    self.expect(Token::ParenOpen);
-                    let root = self.parse_expr();
-                    self.expect(Token::Comma);
-                    let leaf = self.parse_expr();
-                    self.expect(Token::Comma);
-                    let path = self.parse_expr();
-                    self.expect(Token::ParenClose);
-                    Expr::Call("verify_merkle_proof".to_string(), vec![root, leaf, path])
+                    self.expect(Token::ParenOpen)?;
+                    let root = self.parse_expr()?;
+                    self.expect(Token::Comma)?;
+                    let leaf = self.parse_expr()?;
+                    self.expect(Token::Comma)?;
+                    let path = self.parse_expr()?;
+                    self.expect(Token::ParenClose)?;
+                    Ok(Expr::Call("verify_merkle_proof".to_string(), vec![root, leaf, path]))
                 } else if self.peek() == &Token::BracketOpen {
                     self.consume();
-                    let key = self.parse_expr();
-                    self.expect(Token::BracketClose);
-                    Expr::MappingRead(name, Box::new(key))
+                    let key = self.parse_expr()?;
+                    self.expect(Token::BracketClose)?;
+                    Ok(Expr::MappingRead(name, Box::new(key)))
                 } else {
-                    Expr::Ident(name)
+                    Ok(Expr::Ident(name))
                 }
             }
             Token::Storage => {
-                self.expect(Token::Colon);
-                self.expect(Token::Colon);
+                self.expect(Token::Colon)?;
+                self.expect(Token::Colon)?;
                 let name = if let Token::Ident(name) = self.consume() {
                     name
                 } else {
-                    panic!("Expected name")
+                    return Err(CompileError::ParserError("Expected name".to_string()));
                 };
-                Expr::StorageRead(name)
+                Ok(Expr::StorageRead(name))
             }
-            _ => panic!("Expected primary expression"),
+            _ => Err(CompileError::ParserError("Expected primary expression".to_string())),
         }
     }
 }

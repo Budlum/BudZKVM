@@ -9,7 +9,31 @@ Ancak bir sorun var: Hiçbir geliştirici oturup `Instruction { opcode: Add, dst
 Projemizdeki `bud-compiler` crate'i, Bud adını verdiğimiz yüksek seviyeli veya assembly benzeri basit dili alıp, bizim VM'imizin anladığı bytecode'a çevirir. Bir derleyici yazmak başlı başına bir sanat olsa da, temel adımları şunlardır:
 
 1. **Lexer (Sözcük Analizi):** Kaynak kodunu karakter karakter okuyup anlamlı kelimelere (Token'lara) böler. Örneğin `let x = 5;` ifadesi şu tokenlara dönüşür: `[LET, IDENT(x), EQ, NUMBER(5), SEMICOLON]`.
+   
+   > [!NOTE]
+   > **Yorum Satırı Desteği:** Lexer katmanında tek satırlı (`// ...`) ve çok satırlı blok yorumlar (`/* ... */`) Logos tabanlı kurallarla dinamik olarak taranır ve derleme aşamasına girmeden temiz bir şekilde yoksayılır (`logos::skip`).
+   
 2. **Parser (Sözdizimi Analizi):** Token dizisini alıp bir "Abstract Syntax Tree" (Soyut Sözdizimi Ağacı - AST) oluşturur. Bu ağaç kodun mantıksal yapısını yansıtır.
+   
+   #### Operatör Önceliği ve Parantezlerin Çözümü (Operator Precedence)
+   Düz ve recursive-descent parser tasarımlarında en sık yapılan hata aritmetik ifadelerin düz bir sırayla (soldan sağa) çözülmesidir. Örneğin `2 + 3 * 4` ifadesinin sonucu düz bir parser ile `20` çıkarken, matematiksel olarak `14` olması gerekir. 
+   
+   Bud derleyicisinde bu sorunu **Operatör Önceliği (Operator Precedence)** katmanlandırmasıyla çözdük:
+   * **`parse_expr`**: Karşılaştırma operatörlerini (`==`, `!=`, `<`, `>`, `<=`, `>=`) çözümler.
+   * **`parse_arith`**: Toplama ve çıkarma işlemlerini (`+`, `-`) çözümler.
+   * **`parse_term`**: Çarpma ve bölme işlemlerini (`*`, `/`) çözümler.
+   * **`parse_primary`**: En yüksek önceliğe sahip olan literal sayıları, hexadecimal sayıları (`0x...`), değişken isimlerini ve **parantez gruplamalarını** (`( ... )`) çözümler.
+   
+   Bu sayede `(2 + 3) * 4` gibi gruplamalar ve `2 + 3 * 4` gibi öncelikli işlemler matematiksel kurallara tam uyumlu şekilde derlenir.
+
+   #### Paniksiz Hata Yönetimi (Result-Based Parsing)
+   Erken aşama derleyici tasarımlarında parser, karşılaştığı herhangi bir sözdizimi hatasında `panic!()` fırlatıyor ve derleyici sınırı `std::panic::catch_unwind` ile bu panikleri yakalıyordu. Bu yaklaşım hem kırılgandır hem de Rust dilinin güvenlik felsefesine aykırıdır.
+   
+   Parser mimarisini tamamen **Result-based** olacak şekilde yeniden tasarladık:
+   * Tüm parse metotları artık `Result<ASTNode, CompileError>` döner.
+   * Hata durumunda derleyici paniklemek yerine `CompileError::ParserError(String)` üreterek hatayı yukarıya (`?` operatörüyle) temiz bir şekilde fırlatır.
+   * Derleyicinin tüm hata fırlatma durumları `test_parser_error_propagation` negatif testleriyle güvence altına alınmıştır.
+
 3. **Semantic Analyzer (Anlamsal Analiz):** Değişkenler tanımlanmış mı? Tipler uyuşuyor mu? Kullanılmayan değişken var mı? gibi mantıksal hataları yakalar.
 4. **Code Generation (Kod Üretimi):** İşte bizim ISA'mız burada devreye girer. AST üzerinde gezilerek (traversal) her bir düğüm için uygun `Instruction` üretilir. Örneğin `x = 5` ifadesi `Load R1, 5` komutuna dönüştürülür.
 

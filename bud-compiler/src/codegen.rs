@@ -255,8 +255,8 @@ impl Codegen {
                 self.emit(Opcode::Halt, 0, 0, 0, 0);
             }
             Stmt::Emit(_name, args) => {
-                if !args.is_empty() {
-                    let reg = self.generate_expr(&args[0], scope, storage);
+                for arg in args {
+                    let reg = self.generate_expr(arg, scope, storage);
                     self.emit(Opcode::Log, 0, reg, 0, 0);
                 }
             }

@@ -167,12 +167,29 @@ Bu basit ama kritik önlem, üretim ortamındaki L1 doğrulama düğümlerini Do
 Kod güvenliği sadece matematikle bitmez. CLI arayüzü ve yerel dosya sistemindeki eyalet (state) yönetiminin de operasyonel olarak güvenli olması şarttır.
 
 ### StateBackend Commit ve Rollback Mekanizması
-BudZKVM artık bir akıllı sözleşme eyaleti taşımaktadır. İşlem yürütülürken storage güncellemeleri anında diske yazılırsa ve yarı yolda bir `OutOfGas` hatası oluşursa eyalet tutarsız (corrupted) kalır.
+BudZKVM artık bir akıllı sözleşme eyaleti taşımaktadır. İşlem yürütülürken storage güncellemeleri anında diske yazılırsa ve yarı yolda bir `OutOfGas` hatası veya prover doğrulama hatası oluşursa eyalet tutarsız (corrupted) kalır.
 
 Bunu önlemek için işlemsel (transactional) bir **`StateBackend`** tasarımı uyguladık:
-* `StateBackend` yapısı içindeki `accounts` güncellemelerini geçici bir journal (günlük) üzerinde biriktirir.
+* `StateBackend` yapısı içindeki güncellemeleri geçici bir günlük (journal/backup) üzerinde biriktirir.
 * Eğer yürütme tamamen başarılı olursa ve üretilen STARK ispatı doğrulanırsa `commit()` çağrılır ve güncellemeler kalıcı eyalete uygulanır.
-* Hata durumunda veya ispat doğrulanamazsa `rollback()` tetiklenerek eyalet eski tutarlı durumuna anında geri döndürülür.
+* Yürütme sırasında bir hata oluşursa veya üretilen ispat verifier tarafından doğrulanamazsa `rollback()` tetiklenerek eyalet eski tutarlı durumuna anında geri döndürülür.
+
+#### Sıkı Kapsülleme ve CLI Entegrasyonu (Encapsulation)
+Operasyonel güvenliği en üst düzeye çıkarmak için, `State` yapısının içindeki `accounts` HashMap'ini kesin olarak **private** hale getirdik. CLI (`bud-cli`) veya herhangi bir harici modül artık doğrudan bu harita üzerinde okuma/yazma gerçekleştiremez. 
+
+Bunun yerine, yürütme boru hattı (`run_pipeline`) tüm eyalet erişimlerini `StateBackend` trait'inin sunduğu güvenli metotlar (`get_account`, `set_account`, `begin_transaction`, `commit`, `rollback`) üzerinden yürütür. Bu sayede:
+1. Yürütme başında bir işlem günlüğü (`begin_transaction`) başlatılır.
+2. İşlem sonucuna göre ya atomik disk yazımı tetiklenir (`commit`) ya da tüm tahrifatlar geri alınır (`rollback`).
+3. State serileştirme işlemleri de `save_to` metodu ile doğrudan `State` yapısı içinden atomik işletim sistemi komutlarıyla yönetilir.
+
+### 64 Derinlikli Sparse Merkle Tree (SMT) Eyalet Kökü
+Erken sürümlerde eyalet kökü (state root), tüm hesapların düz bir Keccak256 hash'iydi. Düz hash modelleri ZK sistemleri için uygun değildir çünkü L1/L2 düğümlerinin kısmi eyalet kanıtlarını (inclusion proofs) doğrulamasına izin vermez.
+
+BudZKVM eyalet kökü altyapısını **64 Derinlikli Sparse Merkle Tree (SMT)** mimarisiyle yeniden inşa ettik:
+* **Anahtarlar (Keys):** Account ID'leri (u64) 256-bit dizisine dönüştürülerek ağaçta yaprak koordinatlarını belirler.
+* **Yapraklar (Leaves):** Her bir aktif hesabın `nonce`, `balance`, `code_hash` dan `storage_root` alanları birleştirilerek hash'lenir (`hash_account`).
+* **Boş Alt Ağaçlar (Sparse Subtrees):** Ağacın çoğunluğu boş hesaplardan oluştuğu için, $O(2^{64})$ işlem maliyetini önleyen önceden hesaplanmış `EMPTY_HASHES` önbelleği kullanılır.
+* **Merkle İspatları (SMT Proofs):** `get_account_proof` metodu ile bir hesabın eyalette var olduğunu (Inclusion Proof) veya olmadığını (Non-membership Proof) kanıtlayan $O(\log n)$ (64 hash boyutu) Merkle ispatları üretilir. `verify_account_proof` fonksiyonu ile de bu kanıtlar saniyeler içinde doğrulanabilir.
 
 ### State Root Domain Separation
 Farklı eyalet veya ağ sürümleri arasındaki çakışmaları engellemek için, Keccak256 eyalet kökü hesaplanırken **Domain Separation** (alan ayrımı) ön eki eklenmiştir:

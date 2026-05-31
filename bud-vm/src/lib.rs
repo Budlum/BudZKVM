@@ -120,6 +120,7 @@ impl Vm {
     }
 
     pub fn step(&mut self, program: &[u64]) -> Result<(), VmError> {
+        self.registers[0] = 0; // Enforce r0 is always 0
         if self.halted {
             return Ok(());
         }
@@ -234,7 +235,9 @@ impl Vm {
                     memory_val = Some(val);
                     val
                 } else {
-                    0
+                    self.halted = true;
+                    self.error = Some(VmError::InvalidMemoryAccess);
+                    return Err(VmError::InvalidMemoryAccess);
                 };
                 self.registers[dst_idx as usize] = result;
                 self.pc += 1;
@@ -247,6 +250,10 @@ impl Vm {
                     memory_addr = Some(addr);
                     memory_val = Some(src2_val);
                     is_memory_write = true;
+                } else {
+                    self.halted = true;
+                    self.error = Some(VmError::InvalidMemoryAccess);
+                    return Err(VmError::InvalidMemoryAccess);
                 }
                 self.pc += 1;
                 (0, cur_pc + 1)
@@ -422,6 +429,8 @@ impl Vm {
                 (result, cur_pc + 1)
             }
         };
+
+        self.registers[0] = 0; // Enforce r0 is always 0
 
         self.trace.push(Step {
             pc: cur_pc,
@@ -611,5 +620,24 @@ mod tests {
         assert_eq!(vm.pc, 0);
         assert_eq!(vm.trace.len(), 1);
         assert_eq!(vm.registers[1], 0);
+    }
+
+    #[test]
+    fn test_memory_oob_safety() {
+        let program_load_oob = vec![
+            inst(Opcode::Load, 1, 1, 0, 100),
+        ];
+        let mut vm = Vm::new(64);
+        let receipt = vm.run_receipt(&program_load_oob);
+        assert!(!receipt.success);
+        assert_eq!(receipt.error, Some(VmError::InvalidMemoryAccess));
+
+        let program_store_oob = vec![
+            inst(Opcode::Store, 0, 1, 2, 100),
+        ];
+        let mut vm2 = Vm::new(64);
+        let receipt2 = vm2.run_receipt(&program_store_oob);
+        assert!(!receipt2.success);
+        assert_eq!(receipt2.error, Some(VmError::InvalidMemoryAccess));
     }
 }

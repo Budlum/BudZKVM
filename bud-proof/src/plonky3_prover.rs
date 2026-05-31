@@ -13,7 +13,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{create_test_fri_params, TwoAdicFriPcs};
+use p3_fri::TwoAdicFriPcs;
 use p3_goldilocks::Goldilocks;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
@@ -59,7 +59,15 @@ fn build_config() -> MyConfig {
     let compress = MyCompress::new(Keccak256Hash {});
     let val_mmcs = MyMmcs::new(hash, compress, 0);
     let challenge_mmcs = MyChallengeMmcs::new(val_mmcs.clone());
-    let fri_params = create_test_fri_params(challenge_mmcs, 0);
+    let fri_params = p3_fri::FriParameters {
+        log_blowup: 3,
+        max_log_arity: 2,
+        log_final_poly_len: 0,
+        num_queries: 100,
+        commit_proof_of_work_bits: 16,
+        query_proof_of_work_bits: 16,
+        mmcs: challenge_mmcs,
+    };
     let inner_challenger = HashChallenger::<u8, Keccak256Hash, 32>::new(vec![], Keccak256Hash {});
     let challenger = MyChallenger::new(inner_challenger);
     let dft = Radix2DitParallel::default();
