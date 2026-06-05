@@ -116,13 +116,26 @@ Bu sayede CLI'da üretilen bytecode ile L1 transaction payload formatı aynı ka
 
 ## Sonuç ve Gelecek
 
-Tebrikler! Sıfırdan başlayarak, kendi komut setini tanımlayan, kodu çalıştıran ve sonucun doğruluğunu kriptografik olarak kanıtlayan tam teşekküllü bir ZKVM tasarladınız.
+Tebrikler! Sifirdan baslayarak, kendi komut setini tanimlayan, kodu calistiran ve sonucun dogrulugunu kriptografik olarak kanitlayan tam tesekkullu bir ZKVM tasarladiniz.
 
-**Peki Sırada Ne Var?**
-* **Memory ve Storage Chiplet:** Şu anda register tablosu üzerinden consistency (tutarlılık) sağlıyoruz. Aynı mantığı (LogUp veya Permutation Argument) kalıcı depolama (RAM/Storage) için kurarak karmaşık akıllı sözleşmeleri destekleyebilirsiniz.
-* **Continuations (Süreklilik):** RAM ve işlem gücü limitleri yüzünden trace boyutu çok büyüyemez. Çok büyük programları kanıtlamak için Execution Trace'i parçalara bölüp (chunk) ayrı ayrı kanıtlamanız ve sonra bunları birleştirmeniz (Recursive Proofs) gerekir.
-* **Contract State Bridge:** Budlum L1 içindeki account state/storage ile BudZKVM `SRead/SWrite` alanını daha güçlü bir state root protokolüne bağlamak gerekir.
+**Faz 0 Tamamlandi (31/31 opcode production, 51 test, 0 failure):**
+* Tum opcode'larin AIR constraint'leri tamamlandi (Comparison 64-bit decomposition, Bitwise cebirsel esdegerlik, Poseidon4 hash, Storage STORAGE_BASE memory LogUp, VerifyMerkle poseidon4 tabanli).
+* `postcard` serilestirme (bounded, DoS korumali).
+* `RUST_LOG=info` ile tum pipeline'da structured tracing.
+* 8 negatif test (tampered comparison, bitwise, poseidon S-box, storage, PC, public inputs, program, proof bytes).
+* CI: fmt + check + clippy + test + docs link check + cargo deny.
 
-Bu rehber, devasa ZK okyanusunda sadece bir başlangıçtı. Artık "ZKVM Nasıl Çalışır?" sorusuna verebilecek koda dayalı, pratik bir yanıtınız var. 
+**Sırada Ne Var? (Faz 1: Performans)**
+* Benchmark suite (criterion), proving/verification time olcumleri.
+* Prover paralellestirme optimizasyonu (Rayon).
+* Proof boyut optimizasyonu (FRI parametre tuning).
 
-Mutlu kodlamalar!
+**Sırada Ne Var? (Faz 2: Dil ve Compiler)**
+* Struct/Kayit destegi, Mapping (Map<K,V>), Standart kutuphane.
+* Hata mesajlari ve source span iyilestirmesi (miette).
+* Debug modu ve step-by-step interactive debugger.
+
+**Sırada Ne Var? (Faz 3: ZK Gelistirmeler)**
+* Recursive proof aggregation (coklu transaction -> tek block proof).
+* ZK mode (zero-knowledge), Verifier WASM/ EVM target.
+* Poseidon multi-round tam AIR dogrulamasi.

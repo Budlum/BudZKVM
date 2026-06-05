@@ -1,5 +1,6 @@
 use bud_isa::{Instruction, Opcode};
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VmError {
@@ -386,10 +387,7 @@ impl Vm {
                 (0, cur_pc + 1)
             }
             Opcode::Poseidon => {
-                let result = src1_val
-                    .wrapping_mul(31)
-                    .wrapping_add(src2_val)
-                    .wrapping_add(0x1337);
+                let result = poseidon4_hash(src1_val, src2_val);
                 self.registers[dst_idx as usize] = result;
                 self.pc += 1;
                 (result, cur_pc + 1)
@@ -414,16 +412,35 @@ impl Vm {
             Opcode::VerifyMerkle => {
                 let root = src1_val;
                 let leaf = src2_val;
-                let path = usize::try_from(inst.imm)
-                    .ok()
-                    .and_then(|idx| self.registers.get(idx))
-                    .copied()
-                    .unwrap_or(0);
-                let computed = leaf
-                    .wrapping_mul(31)
-                    .wrapping_add(path)
-                    .wrapping_add(0x1337);
-                let result = if computed == root { 1 } else { 0 };
+                let path_addr = inst.imm as usize;
+                // Memory layout: [key: u64, 64 × sibling: u64]
+                // Total: 520 bytes (65 × u64)
+                let path_end = path_addr.wrapping_add(8 * 65);
+                let result = if path_end <= self.memory.len() {
+                    let mut bytes = [0u8; 8];
+                    bytes.copy_from_slice(&self.memory[path_addr..path_addr + 8]);
+                    let key = u64::from_le_bytes(bytes);
+
+                    let mut current = leaf;
+                    for i in 0..64 {
+                        let sibling_addr = path_addr + 8 + i * 8;
+                        bytes.copy_from_slice(&self.memory[sibling_addr..sibling_addr + 8]);
+                        let sibling = u64::from_le_bytes(bytes);
+                        let bit = (key >> i) & 1;
+                        current = if bit == 0 {
+                            poseidon4_hash(current, sibling)
+                        } else {
+                            poseidon4_hash(sibling, current)
+                        };
+                    }
+                    if current == root {
+                        1
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
                 self.registers[dst_idx as usize] = result;
                 self.pc += 1;
                 (result, cur_pc + 1)
@@ -448,6 +465,18 @@ impl Vm {
             is_memory_write,
             stack_pointer: self.stack.len(),
         });
+
+        debug!(
+            pc = cur_pc,
+            op = ?inst.opcode,
+            rd = inst.rd,
+            rs1 = inst.rs1,
+            rs2 = inst.rs2,
+            imm = inst.imm,
+            dst_val,
+            gas = self.gas_used,
+            "Step executed"
+        );
 
         Ok(())
     }
@@ -518,6 +547,100 @@ impl Vm {
             _ => 1,
         }
     }
+}
+
+/// 4-round Poseidon hash over Goldilocks field (alpha=7, width=8, full rounds only).
+/// Used for both VM execution and prover trace generation.
+///
+/// MDS circulant matrix first row: [7, 1, 3, 8, 8, 3, 4, 9]
+/// Round constants: first 4 rounds from Plonky3 Poseidon1 Goldilocks width-8
+pub fn poseidon4_hash(a: u64, b: u64) -> u64 {
+    const P: u64 = 18446744069414584321;
+
+    // MDS circulant matrix (8x8) from first row [7,1,3,8,8,3,4,9]
+    const MDS: [[u64; 8]; 8] = [
+        [7, 1, 3, 8, 8, 3, 4, 9],
+        [9, 7, 1, 3, 8, 8, 3, 4],
+        [4, 9, 7, 1, 3, 8, 8, 3],
+        [3, 4, 9, 7, 1, 3, 8, 8],
+        [8, 3, 4, 9, 7, 1, 3, 8],
+        [8, 8, 3, 4, 9, 7, 1, 3],
+        [3, 8, 8, 3, 4, 9, 7, 1],
+        [1, 3, 8, 8, 3, 4, 9, 7],
+    ];
+
+    // Round constants (first 4 from Plonky3 Poseidon1 Goldilocks width-8)
+    const RC: [[u64; 8]; 4] = [
+        [
+            0xdd5743e7f2a5a5d9,
+            0xcb3a864e58ada44b,
+            0xffa2449ed32f8cdc,
+            0x42025f65d6bd13ee,
+            0x7889175e25506323,
+            0x34b98bb03d24b737,
+            0xbdcc535ecc4faa2a,
+            0x5b20ad869fc0d033,
+        ],
+        [
+            0xf1dda5b9259dfcb4,
+            0x27515210be112d59,
+            0x4227d1718c766c3f,
+            0x26d333161a5bd794,
+            0x49b938957bf4b026,
+            0x4a56b5938b213669,
+            0x1120426b48c8353d,
+            0x6b323c3f10a56cad,
+        ],
+        [
+            0xce57d6245ddca6b2,
+            0xb1fc8d402bba1eb1,
+            0xb5c5096ca959bd04,
+            0x6db55cd306d31f7f,
+            0xc49d293a81cb9641,
+            0x1ce55a4fe979719f,
+            0xa92e60a9d178a4d1,
+            0x002cc64973bcfd8c,
+        ],
+        [
+            0xcea721cce82fb11b,
+            0xe5b55eb8098ece81,
+            0x4e30525c6f1ddd66,
+            0x43c6702827070987,
+            0xaca68430a7b5762a,
+            0x3674238634df9c93,
+            0x88cee1c825e33433,
+            0xde99ae8d74b57176,
+        ],
+    ];
+
+    let mut s: [u64; 8] = [a, b, 0, 0, 0, 0, 0, 0];
+
+    for round_rc in RC.iter() {
+        // Add round constants
+        for i in 0..8 {
+            s[i] = s[i].wrapping_add(round_rc[i]) % P;
+        }
+        // S-box: x^7 via x2=x^2, x4=x2^2, x7=x4*x2*x mod P
+        let mut sbox: [u64; 8] = [0; 8];
+        for i in 0..8 {
+            let x = s[i];
+            let x2 = ((x as u128 * x as u128) % P as u128) as u64;
+            let x4 = ((x2 as u128 * x2 as u128) % P as u128) as u64;
+            sbox[i] = (((x4 as u128 * x2 as u128) % P as u128 * x as u128) % P as u128) as u64;
+        }
+        // MDS linear layer
+        let mut next: [u64; 8] = [0; 8];
+        for i in 0..8 {
+            let mut sum: u128 = 0;
+            for j in 0..8 {
+                sum = (sum + MDS[i][j] as u128 * sbox[j] as u128) % P as u128;
+            }
+            next[i] = sum as u64;
+        }
+        s = next;
+    }
+
+    s[0]
 }
 
 #[cfg(test)]
@@ -624,17 +747,13 @@ mod tests {
 
     #[test]
     fn test_memory_oob_safety() {
-        let program_load_oob = vec![
-            inst(Opcode::Load, 1, 1, 0, 100),
-        ];
+        let program_load_oob = vec![inst(Opcode::Load, 1, 1, 0, 100)];
         let mut vm = Vm::new(64);
         let receipt = vm.run_receipt(&program_load_oob);
         assert!(!receipt.success);
         assert_eq!(receipt.error, Some(VmError::InvalidMemoryAccess));
 
-        let program_store_oob = vec![
-            inst(Opcode::Store, 0, 1, 2, 100),
-        ];
+        let program_store_oob = vec![inst(Opcode::Store, 0, 1, 2, 100)];
         let mut vm2 = Vm::new(64);
         let receipt2 = vm2.run_receipt(&program_store_oob);
         assert!(!receipt2.success);

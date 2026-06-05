@@ -1,7 +1,7 @@
 use p3_air::{Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, WindowAccess};
 use p3_field::PrimeCharacteristicRing;
 
-pub const TRACE_WIDTH: usize = 65;
+pub const TRACE_WIDTH: usize = 354;
 
 pub const COL_CLK: usize = 0;
 pub const COL_PC: usize = 1;
@@ -74,6 +74,17 @@ pub const COL_EQ_DIFF_INV: usize = 61;
 pub const COL_JNZ_COND_INV: usize = 62;
 pub const COL_RAW_INST: usize = 63;
 pub const COL_CPU_ACTIVE: usize = 64;
+
+// Comparison witness columns (64-bit decomposition + equality prefix flags)
+pub const COL_CMP_RS1_BASE: usize = 65; // 65..128 — rs1 bit decomposition
+pub const COL_CMP_RS2_BASE: usize = 129; // 129..192 — rs2 bit decomposition
+pub const COL_CMP_EQ_BASE: usize = 193; // 193..256 — equality prefix flags eq_0..eq_63
+pub const COL_CMP_LT_RAW: usize = 257; // raw less-than result computed from bits
+
+// Poseidon witness columns (4-round, width=8, alpha=7, all full rounds)
+pub const COL_POSEIDON_STATE_BASE: usize = 258; // 258..289 — state[r][i] at round entry (r=0..3, i=0..7)
+pub const COL_POSEIDON_X2_BASE: usize = 290; // 290..321 — x^2 intermediates per round/element
+pub const COL_POSEIDON_X4_BASE: usize = 322; // 322..353 — x^4 intermediates per round/element
 
 pub struct BudAir {
     pub num_steps: usize,
@@ -284,20 +295,6 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
                 - rs1_val.clone() * (one.clone() - div_zero.clone()),
         );
 
-        // Experimental bitwise opcodes
-        builder
-            .when(is_and)
-            .assert_zero(rd_val_new.clone() - rd_val_new.clone());
-        builder
-            .when(is_or)
-            .assert_zero(rd_val_new.clone() - rd_val_new.clone());
-        builder
-            .when(is_xor)
-            .assert_zero(rd_val_new.clone() - rd_val_new.clone());
-        builder
-            .when(is_not)
-            .assert_zero(rd_val_new.clone() - rd_val_new.clone());
-
         // Soundness: Inversion field-native with zero flag
         let inv_zero: AB::Expr = cur[COL_INV_ZERO].into();
         builder.when(is_inv.clone()).assert_bool(inv_zero.clone());
@@ -354,6 +351,13 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
         );
 
         builder.when(is_assert).assert_one(rs1_val.clone());
+
+        // VerifyMerkle: result is boolean (0 or 1)
+        // Full Merkle path verification requires multi-round hash constraints;
+        // the VM computes the correct result deterministically via poseidon4_hash.
+        builder
+            .when(is_verify_merkle.clone())
+            .assert_bool(rd_val_new.clone());
 
         let is_push: AB::Expr = cur[COL_IS_PUSH].into();
         let is_pop: AB::Expr = cur[COL_IS_POP].into();
@@ -639,28 +643,35 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
             builder.when_first_row().assert_zero_ext(s_reg_cur.clone());
             builder.when_last_row().assert_zero_ext(s_reg_cur);
 
-            // Memory LogUp
+            // Memory LogUp (includes Load/Store/Push/Pop/Call/Ret + SRead/SWrite)
             let rs1_idx: AB::Expr = cur[COL_RS1_IDX].into();
             let is_real_mem_op = (is_load.clone() + is_store.clone()) * rs1_idx.clone(); // If rs1 is 0, it's LoadImm
             let is_stack_op = is_push.clone() + is_pop.clone() + is_call.clone() + is_ret.clone();
-            let is_any_mem_op = is_real_mem_op.clone() + is_stack_op.clone();
+            let is_storage_op = is_sread.clone() + is_swrite.clone();
+            let is_any_mem_op =
+                is_real_mem_op.clone() + is_stack_op.clone() + is_storage_op.clone();
 
             let stack_base = AB::Expr::from(AB::F::from_u64(1 << 60));
+            let storage_base = AB::Expr::from(AB::F::from_u64(2 << 60));
             let stack_addr = stack_base.clone()
                 + (is_push.clone() + is_call.clone()) * cur_stack_ptr.clone()
                 + (is_pop.clone() + is_ret.clone()) * (cur_stack_ptr.clone() - one.clone());
+            let storage_addr = storage_base + cur[COL_IMM].into();
 
             let final_mem_addr = is_real_mem_op.clone()
                 * (cur[COL_RS1_VAL].into() + cur[COL_IMM].into())
-                + is_stack_op.clone() * stack_addr;
+                + is_stack_op.clone() * stack_addr
+                + is_storage_op.clone() * storage_addr;
 
-            let is_write = is_store.clone() + is_push.clone() + is_call.clone();
+            let is_write = is_store.clone() + is_push.clone() + is_call.clone() + is_swrite.clone();
             let cpu_mem_val = is_load * cur[COL_RD_VAL_NEW].into()
                 + is_store * cur[COL_RS2_VAL].into()
                 + is_push * cur[COL_RS1_VAL].into()
                 + is_pop * cur[COL_RD_VAL_NEW].into()
                 + is_call * (cur[COL_PC].into() + one.clone())
-                + is_ret * cur[COL_NEXT_PC].into();
+                + is_ret * cur[COL_NEXT_PC].into()
+                + is_sread * cur[COL_RD_VAL_NEW].into()
+                + is_swrite * cur[COL_RS1_VAL].into();
 
             let c_cpu_mem = term(
                 one.clone(),
@@ -730,6 +741,199 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
             );
             builder.when_first_row().assert_zero_ext(s_prog_cur.clone());
             builder.when_last_row().assert_zero_ext(s_prog_cur);
+        }
+
+        // --- Comparison + Bitwise AIR constraints ---
+        // Bit decomposition shared between comparison and bitwise (And/Or/Xor) opcodes
+        let is_cmp = is_lt.clone() + is_gt.clone() + is_lte.clone() + is_gte.clone();
+        let is_bw_bits = is_and.clone() + is_or.clone() + is_xor.clone();
+        let is_cmp_or_bw = is_cmp.clone() + is_bw_bits.clone();
+
+        // Booleanity of all bit decomposition columns
+        for i in 0..64 {
+            let a_bit: AB::Expr = cur[COL_CMP_RS1_BASE + i].into();
+            let b_bit: AB::Expr = cur[COL_CMP_RS2_BASE + i].into();
+            builder.when(is_cmp_or_bw.clone()).assert_bool(a_bit);
+            builder.when(is_cmp_or_bw.clone()).assert_bool(b_bit);
+        }
+
+        // Equality prefix flags are boolean (comparison only)
+        for i in 0..64 {
+            let eq_i: AB::Expr = cur[COL_CMP_EQ_BASE + i].into();
+            builder.when(is_cmp.clone()).assert_bool(eq_i);
+        }
+
+        // Reconstitution: rs1_val = sum(a_i * 2^i)
+        {
+            let mut rs1_bits_sum: AB::Expr = AB::Expr::ZERO;
+            for i in 0..64 {
+                let pow2 = AB::F::from_u64(1u64 << i);
+                let a_bit: AB::Expr = cur[COL_CMP_RS1_BASE + i].into();
+                rs1_bits_sum += a_bit * pow2;
+            }
+            builder
+                .when(is_cmp_or_bw.clone())
+                .assert_eq(rs1_bits_sum, rs1_val.clone());
+        }
+
+        // Reconstitution: rs2_val = sum(b_i * 2^i) (comparison + And/Or/Xor only)
+        {
+            let mut rs2_bits_sum: AB::Expr = AB::Expr::ZERO;
+            for i in 0..64 {
+                let pow2 = AB::F::from_u64(1u64 << i);
+                let b_bit: AB::Expr = cur[COL_CMP_RS2_BASE + i].into();
+                rs2_bits_sum += b_bit * pow2;
+            }
+            builder
+                .when(is_cmp.clone() + is_bw_bits.clone())
+                .assert_eq(rs2_bits_sum, rs2_val.clone());
+        }
+
+        // Bitwise result constraints (And/Or/Xor using bit decomposition)
+        {
+            let mut and_sum: AB::Expr = AB::Expr::ZERO;
+            for i in 0..64 {
+                let pow2 = AB::F::from_u64(1u64 << i);
+                let a_bit: AB::Expr = cur[COL_CMP_RS1_BASE + i].into();
+                let b_bit: AB::Expr = cur[COL_CMP_RS2_BASE + i].into();
+                and_sum += a_bit * b_bit * pow2;
+            }
+            let two_val = AB::Expr::from(AB::F::from_u64(2));
+
+            // And: rd = sum(a_i * b_i * 2^i)
+            builder
+                .when(is_and)
+                .assert_eq(rd_val_new.clone(), and_sum.clone());
+            // Or: rd = rs1 + rs2 - sum(a_i * b_i * 2^i)
+            builder.when(is_or).assert_eq(
+                rd_val_new.clone(),
+                rs1_val.clone() + rs2_val.clone() - and_sum.clone(),
+            );
+            // Xor: rd = rs1 + rs2 - 2 * sum(a_i * b_i * 2^i)
+            builder.when(is_xor).assert_eq(
+                rd_val_new.clone(),
+                rs1_val.clone() + rs2_val.clone() - two_val * and_sum,
+            );
+        }
+
+        // Not (logical NOT): rd = 1 if rs1 == 0, else rd = 0 (reuse COL_INV_ZERO as inverse witness)
+        {
+            let not_inv: AB::Expr = cur[COL_INV_ZERO].into();
+            let is_nonzero = rs1_val.clone() * not_inv.clone();
+            builder.when(is_not.clone()).assert_bool(is_nonzero.clone());
+            builder
+                .when(is_not.clone())
+                .assert_zero(rs1_val.clone() * (one.clone() - is_nonzero.clone()));
+            builder
+                .when(is_not)
+                .assert_eq(rd_val_new.clone(), one.clone() - is_nonzero);
+        }
+
+        // --- Comparison-specific constraints below ---
+
+        // Equality prefix recursion: eq_i = eq_{i+1} * (1 - a_i - b_i + 2*a_i*b_i)
+        // eq_64 is implicitly 1
+        {
+            let a_63: AB::Expr = cur[COL_CMP_RS1_BASE + 63].into();
+            let b_63: AB::Expr = cur[COL_CMP_RS2_BASE + 63].into();
+            let eq_bit_63 = one.clone() - a_63.clone() - b_63.clone()
+                + AB::Expr::from(AB::F::from_u64(2)) * a_63.clone() * b_63.clone();
+            let eq_63: AB::Expr = cur[COL_CMP_EQ_BASE + 63].into();
+            builder.when(is_cmp.clone()).assert_eq(eq_63, eq_bit_63);
+        }
+        for i in (0..63).rev() {
+            let a_i: AB::Expr = cur[COL_CMP_RS1_BASE + i].into();
+            let b_i: AB::Expr = cur[COL_CMP_RS2_BASE + i].into();
+            let eq_bit_i = one.clone() - a_i.clone() - b_i.clone()
+                + AB::Expr::from(AB::F::from_u64(2)) * a_i.clone() * b_i.clone();
+            let eq_i: AB::Expr = cur[COL_CMP_EQ_BASE + i].into();
+            let eq_next: AB::Expr = cur[COL_CMP_EQ_BASE + i + 1].into();
+            builder
+                .when(is_cmp.clone())
+                .assert_eq(eq_i, eq_next * eq_bit_i);
+        }
+
+        // Raw less-than result: cmp_lt_raw = sum_{i=0}^{63} eq_{i+1} * (1-a_i) * b_i
+        // eq_64 is implicit 1 for the MSB term
+        {
+            let a_63: AB::Expr = cur[COL_CMP_RS1_BASE + 63].into();
+            let b_63: AB::Expr = cur[COL_CMP_RS2_BASE + 63].into();
+            let mut cmp_lt_sum: AB::Expr = (one.clone() - a_63) * b_63;
+            for i in 0..63 {
+                let a_i: AB::Expr = cur[COL_CMP_RS1_BASE + i].into();
+                let b_i: AB::Expr = cur[COL_CMP_RS2_BASE + i].into();
+                let eq_next: AB::Expr = cur[COL_CMP_EQ_BASE + i + 1].into();
+                cmp_lt_sum += eq_next * (one.clone() - a_i) * b_i;
+            }
+            let cmp_lt_raw: AB::Expr = cur[COL_CMP_LT_RAW].into();
+            builder
+                .when(is_cmp.clone())
+                .assert_eq(cmp_lt_raw.clone(), cmp_lt_sum);
+        }
+
+        // Opcode-specific result constraints
+        // eq_0 tells us if all bits are equal (a == b)
+        let cmp_eq_all: AB::Expr = cur[COL_CMP_EQ_BASE].into();
+        let cmp_lt_raw: AB::Expr = cur[COL_CMP_LT_RAW].into();
+
+        // Lt: rd = cmp_lt_raw  (1 if a < b)
+        builder
+            .when(is_lt)
+            .assert_eq(rd_val_new.clone(), cmp_lt_raw.clone());
+        // Gt: rd = 1 - cmp_eq_all - cmp_lt_raw  (1 if a > b)
+        builder.when(is_gt).assert_eq(
+            rd_val_new.clone(),
+            one.clone() - cmp_eq_all.clone() - cmp_lt_raw.clone(),
+        );
+        // Lte: rd = cmp_eq_all + cmp_lt_raw  (1 if a <= b)
+        builder
+            .when(is_lte)
+            .assert_eq(rd_val_new.clone(), cmp_eq_all.clone() + cmp_lt_raw.clone());
+        // Gte: rd = 1 - cmp_lt_raw  (1 if a >= b)
+        builder
+            .when(is_gte)
+            .assert_eq(rd_val_new.clone(), one.clone() - cmp_lt_raw.clone());
+
+        // --- Poseidon hash (4 rounds, alpha=7) ---
+        // VM computes full 4-round hash; AIR verifies round 0 S-box + initial state.
+        // Full multi-round verification requires extended constraint support.
+        {
+            let p: AB::Expr = cur[COL_IS_POSEIDON].into();
+            // Initial state
+            builder
+                .when(p.clone())
+                .assert_eq(cur[COL_POSEIDON_STATE_BASE].into(), rs1_val.clone());
+            builder
+                .when(p.clone())
+                .assert_eq(cur[COL_POSEIDON_STATE_BASE + 1].into(), rs2_val.clone());
+            for i in 2..8 {
+                builder
+                    .when(p.clone())
+                    .assert_zero(cur[COL_POSEIDON_STATE_BASE + i]);
+            }
+            // Round 0 S-box: x2 = (state+RC)^2, x4 = x2^2
+            let rc0: [u64; 8] = [
+                0xdd5743e7f2a5a5d9,
+                0xcb3a864e58ada44b,
+                0xffa2449ed32f8cdc,
+                0x42025f65d6bd13ee,
+                0x7889175e25506323,
+                0x34b98bb03d24b737,
+                0xbdcc535ecc4faa2a,
+                0x5b20ad869fc0d033,
+            ];
+            for i in 0..8 {
+                let s = cur[COL_POSEIDON_STATE_BASE + i].into()
+                    + AB::Expr::from(AB::F::from_u64(rc0[i]));
+                let x2 = cur[COL_POSEIDON_X2_BASE + i].into();
+                let x4 = cur[COL_POSEIDON_X4_BASE + i].into();
+                builder
+                    .when(p.clone())
+                    .assert_eq(x2.clone(), s.clone() * s.clone());
+                builder
+                    .when(p.clone())
+                    .assert_eq(x4.clone(), x2.clone() * x2.clone());
+            }
         }
     }
 }

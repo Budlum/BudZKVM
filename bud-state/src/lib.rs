@@ -110,7 +110,13 @@ fn compute_subtree_proof(
     if target_bit {
         let sibling_hash = compute_subtree_root(left_leaves, depth - 1, prefix);
         proof.push(sibling_hash);
-        compute_subtree_proof(right_leaves, depth - 1, prefix | bit_mask, target_key, proof);
+        compute_subtree_proof(
+            right_leaves,
+            depth - 1,
+            prefix | bit_mask,
+            target_key,
+            proof,
+        );
     } else {
         let sibling_hash = compute_subtree_root(right_leaves, depth - 1, prefix | bit_mask);
         proof.push(sibling_hash);
@@ -389,6 +395,11 @@ mod tests {
         // 2. Verify proof for a non-existent account (non-membership proof)
         let proof_empty = state.get_account_proof(999);
         assert_eq!(proof_empty.len(), 64);
-        assert!(verify_account_proof(root, 999, get_empty_hash(0), &proof_empty));
+        assert!(verify_account_proof(
+            root,
+            999,
+            get_empty_hash(0),
+            &proof_empty
+        ));
     }
 }

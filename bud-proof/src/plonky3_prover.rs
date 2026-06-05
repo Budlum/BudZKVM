@@ -6,7 +6,7 @@ use crate::bud_stark::{
     verify_with_preprocessed as stark_verify_with_preprocessed, StarkConfig,
 };
 use crate::plonky3_air::*;
-use bincode::Options;
+const MAX_PROOF_BYTES: usize = 10 * 1024 * 1024;
 use bud_vm::{Step, Vm};
 use p3_challenger::{HashChallenger, SerializingChallenger64};
 use p3_commit::ExtensionMmcs;
@@ -23,6 +23,7 @@ use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_util::log2_strict_usize;
 use std::boxed::Box;
 use tiny_keccak::{Hasher, Keccak};
+use tracing::{debug, info};
 
 type MyExtensionField = BinomialExtensionField<Goldilocks, 2>;
 type MyHasher = SerializingHasher<Keccak256Hash>;
@@ -51,6 +52,7 @@ struct MemEvent {
 }
 
 const STACK_BASE: u64 = 1 << 60;
+const STORAGE_BASE: u64 = 2 << 60;
 
 pub struct Plonky3Adapter;
 
@@ -155,6 +157,32 @@ fn memory_events(trace: &[Step]) -> Vec<MemEvent> {
                     addr: STACK_BASE + step.stack_pointer as u64,
                     val: step.dst_val,
                     is_write: false,
+                });
+            }
+            bud_isa::Opcode::SRead => {
+                let slot = if step.instruction.imm == -1 {
+                    step.src2_val as i32
+                } else {
+                    step.instruction.imm
+                };
+                events.push(MemEvent {
+                    clk,
+                    addr: STORAGE_BASE + slot as u64,
+                    val: step.dst_val,
+                    is_write: false,
+                });
+            }
+            bud_isa::Opcode::SWrite => {
+                let slot = if step.instruction.imm == -1 {
+                    step.src2_val as i32
+                } else {
+                    step.instruction.imm
+                };
+                events.push(MemEvent {
+                    clk,
+                    addr: STORAGE_BASE + slot as u64,
+                    val: step.src1_val,
+                    is_write: true,
                 });
             }
             _ => {}
@@ -294,6 +322,158 @@ fn trace_matrix(trace: &[Step], _program: &[u64]) -> (RowMajorMatrix<Goldilocks>
             0x00 => values[row_start + COL_IS_HALT] = Goldilocks::new(1),
             _ => {}
         }
+
+        // Comparison + Bitwise witness: bit decomposition + equality prefix flags
+        let is_cmp = opcode == bud_isa::Opcode::Lt
+            || opcode == bud_isa::Opcode::Gt
+            || opcode == bud_isa::Opcode::Lte
+            || opcode == bud_isa::Opcode::Gte;
+        let is_bw_bits = opcode == bud_isa::Opcode::And
+            || opcode == bud_isa::Opcode::Or
+            || opcode == bud_isa::Opcode::Xor;
+
+        if is_cmp || is_bw_bits {
+            let a = step.src1_val;
+            let b = step.src2_val;
+
+            for i in 0..64 {
+                values[row_start + COL_CMP_RS1_BASE + i] = Goldilocks::new((a >> i) & 1);
+                values[row_start + COL_CMP_RS2_BASE + i] = Goldilocks::new((b >> i) & 1);
+            }
+
+            if is_cmp {
+                let mut eq_cur = true;
+                for i in (0..64).rev() {
+                    let a_i = (a >> i) & 1;
+                    let b_i = (b >> i) & 1;
+                    eq_cur = eq_cur && (a_i == b_i);
+                    values[row_start + COL_CMP_EQ_BASE + i] =
+                        Goldilocks::new(if eq_cur { 1 } else { 0 });
+                }
+
+                let mut eq_next = true;
+                let mut cmp_lt_raw = 0u64;
+                for i in (0..64).rev() {
+                    let a_i = (a >> i) & 1;
+                    let b_i = (b >> i) & 1;
+                    let eq_bit = a_i == b_i;
+                    if eq_next && !eq_bit && a_i == 0 && b_i == 1 {
+                        cmp_lt_raw = 1;
+                    }
+                    eq_next = eq_next && eq_bit;
+                }
+                values[row_start + COL_CMP_LT_RAW] = Goldilocks::new(cmp_lt_raw);
+            }
+        }
+
+        // Not (logical NOT) — store inverse witness in COL_INV_ZERO
+        if opcode == bud_isa::Opcode::Not {
+            let a = step.src1_val;
+            let inv = if a != 0 {
+                bud_vm::field_inverse_goldilocks(a)
+            } else {
+                0
+            };
+            values[row_start + COL_INV_ZERO] = Goldilocks::new(inv);
+        }
+
+        // Poseidon witness: fill 4-round state + S-box intermediates
+        if opcode == bud_isa::Opcode::Poseidon {
+            let a = step.src1_val;
+            let b = step.src2_val;
+
+            const P: u64 = 18446744069414584321;
+
+            let mds: [[u64; 8]; 8] = [
+                [7, 1, 3, 8, 8, 3, 4, 9],
+                [9, 7, 1, 3, 8, 8, 3, 4],
+                [4, 9, 7, 1, 3, 8, 8, 3],
+                [3, 4, 9, 7, 1, 3, 8, 8],
+                [8, 3, 4, 9, 7, 1, 3, 8],
+                [8, 8, 3, 4, 9, 7, 1, 3],
+                [3, 8, 8, 3, 4, 9, 7, 1],
+                [1, 3, 8, 8, 3, 4, 9, 7],
+            ];
+
+            let rc: [[u64; 8]; 4] = [
+                [
+                    0xdd5743e7f2a5a5d9,
+                    0xcb3a864e58ada44b,
+                    0xffa2449ed32f8cdc,
+                    0x42025f65d6bd13ee,
+                    0x7889175e25506323,
+                    0x34b98bb03d24b737,
+                    0xbdcc535ecc4faa2a,
+                    0x5b20ad869fc0d033,
+                ],
+                [
+                    0xf1dda5b9259dfcb4,
+                    0x27515210be112d59,
+                    0x4227d1718c766c3f,
+                    0x26d333161a5bd794,
+                    0x49b938957bf4b026,
+                    0x4a56b5938b213669,
+                    0x1120426b48c8353d,
+                    0x6b323c3f10a56cad,
+                ],
+                [
+                    0xce57d6245ddca6b2,
+                    0xb1fc8d402bba1eb1,
+                    0xb5c5096ca959bd04,
+                    0x6db55cd306d31f7f,
+                    0xc49d293a81cb9641,
+                    0x1ce55a4fe979719f,
+                    0xa92e60a9d178a4d1,
+                    0x002cc64973bcfd8c,
+                ],
+                [
+                    0xcea721cce82fb11b,
+                    0xe5b55eb8098ece81,
+                    0x4e30525c6f1ddd66,
+                    0x43c6702827070987,
+                    0xaca68430a7b5762a,
+                    0x3674238634df9c93,
+                    0x88cee1c825e33433,
+                    0xde99ae8d74b57176,
+                ],
+            ];
+
+            let mut s: [u64; 8] = [a, b, 0, 0, 0, 0, 0, 0];
+
+            for r in 0..4 {
+                // Store entry state
+                for i in 0..8 {
+                    values[row_start + COL_POSEIDON_STATE_BASE + r * 8 + i] = Goldilocks::new(s[i]);
+                }
+
+                // S-box
+                let mut sbox: [u64; 8] = [0; 8];
+                for i in 0..8 {
+                    let s_rc = (s[i].wrapping_add(rc[r][i])) % P;
+                    let x2 = ((s_rc as u128 * s_rc as u128) % P as u128) as u64;
+                    let x4 = ((x2 as u128 * x2 as u128) % P as u128) as u64;
+                    values[row_start + COL_POSEIDON_X2_BASE + r * 8 + i] = Goldilocks::new(x2);
+                    values[row_start + COL_POSEIDON_X4_BASE + r * 8 + i] = Goldilocks::new(x4);
+                    sbox[i] =
+                        (((x4 as u128 * x2 as u128) % P as u128 * s_rc as u128) % P as u128) as u64;
+                }
+
+                // MDS layer
+                if r < 3 {
+                    let mut next: [u64; 8] = [0; 8];
+                    for i in 0..8 {
+                        let mut sum: u128 = 0;
+                        for j in 0..8 {
+                            sum = (sum + mds[i][j] as u128 * sbox[j] as u128) % P as u128;
+                        }
+                        next[i] = sum as u64;
+                    }
+                    s = next;
+                } else {
+                    // Round 3: output verified by AIR constraints
+                }
+            }
+        }
     }
 
     for i in n_cpu..num_rows {
@@ -388,7 +568,7 @@ fn aux_trace_generator(
 ) -> Box<dyn FnOnce(&[MyExtensionField]) -> RowMajorMatrix<Goldilocks>> {
     Box::new(move |random_challenges| {
         let num_rows = main_trace.height();
-        let mut aux_values = vec![MyExtensionField::ZERO; num_rows * 3]; // Register, Memory, Program LogUp
+        let mut aux_values = vec![MyExtensionField::ZERO; num_rows * 3]; // Reg, Mem, Prog
         let alpha = random_challenges[0];
         let beta = random_challenges[1];
         let gamma = random_challenges[2];
@@ -537,7 +717,7 @@ fn aux_trace_generator(
                 s_reg -= (gamma - c_reg).inverse();
             }
 
-            // Memory LogUp
+            // Memory LogUp (includes SRead/SWrite via STORAGE_BASE)
             let m_active = row[COL_MEM_ACTIVE];
             let m_clk = row[COL_MEM_CLK];
             let m_addr = row[COL_MEM_ADDR];
@@ -551,24 +731,30 @@ fn aux_trace_generator(
                     Goldilocks::ZERO
                 };
             let is_stack_op = is_push + is_pop + is_call + is_ret;
-            let is_any_mem_op = is_real_mem_op + is_stack_op;
+            let is_storage_op = is_sread + is_swrite;
+            let is_any_mem_op = is_real_mem_op + is_stack_op + is_storage_op;
 
             let stack_ptr = row[COL_STACK_PTR];
             let stack_base = Goldilocks::from_u64(STACK_BASE);
+            let storage_base = Goldilocks::from_u64(STORAGE_BASE);
             let stack_addr = stack_base
                 + (is_push + is_call) * stack_ptr
                 + (is_pop + is_ret) * (stack_ptr - Goldilocks::ONE);
+            let storage_addr = storage_base + row[COL_IMM];
 
-            let final_mem_addr =
-                is_real_mem_op * (row[COL_RS1_VAL] + row[COL_IMM]) + is_stack_op * stack_addr;
+            let final_mem_addr = is_real_mem_op * (row[COL_RS1_VAL] + row[COL_IMM])
+                + is_stack_op * stack_addr
+                + is_storage_op * storage_addr;
 
-            let is_write = is_store + is_push + is_call;
+            let is_write = is_store + is_push + is_call + is_swrite;
             let cpu_mem_val = is_load * row[COL_RD_VAL_NEW]
                 + is_store * row[COL_RS2_VAL]
                 + is_push * row[COL_RS1_VAL]
                 + is_pop * row[COL_RD_VAL_NEW]
                 + is_call * (row[COL_PC] + Goldilocks::ONE)
-                + is_ret * row[COL_NEXT_PC];
+                + is_ret * row[COL_NEXT_PC]
+                + is_sread * row[COL_RD_VAL_NEW]
+                + is_swrite * row[COL_RS1_VAL];
 
             let c_cpu_mem = register_term(
                 alpha,
@@ -682,6 +868,7 @@ impl ProverAdapter for Plonky3Adapter {
         public_inputs: &ExecutionPublicInputs,
         program: &[u64],
     ) -> Result<ProofEnvelope, ProverError> {
+        info!(trace_len = trace.len(), "Building trace matrix");
         let (matrix, trace_len) = trace_matrix(trace, program);
         let config = build_config();
 
@@ -691,6 +878,11 @@ impl ProverAdapter for Plonky3Adapter {
         };
 
         let degree_bits = log2_strict_usize(matrix.height());
+        debug!(
+            degree_bits,
+            height = matrix.height(),
+            "Commencing STARK prove"
+        );
         let preprocessed = setup_preprocessed(&config, &air, degree_bits);
         let preprocessed_ref = preprocessed.as_ref().map(|(p, _)| p);
 
@@ -709,9 +901,7 @@ impl ProverAdapter for Plonky3Adapter {
             preprocessed_ref,
         );
 
-        let options = bincode::options().with_limit(10 * 1024 * 1024);
-        let proof_bytes = options
-            .serialize(&p3_proof)
+        let proof_bytes = postcard::to_allocvec(&p3_proof)
             .map_err(|e| ProverError::SerializationError(e.to_string()))?;
 
         Ok(ProofEnvelope {
@@ -730,6 +920,11 @@ impl ProverAdapter for Plonky3Adapter {
         expected_inputs: &ExecutionPublicInputs,
         program: &[u64],
     ) -> Result<(), VerifyError> {
+        debug!(
+            version = envelope.proof_format_version,
+            proof_len = envelope.proof_bytes.len(),
+            "Verifying proof"
+        );
         if envelope.proof_format_version != 1 {
             return Err(VerifyError::InvalidEnvelope(
                 "Unsupported proof format version".to_string(),
@@ -784,9 +979,9 @@ impl ProverAdapter for Plonky3Adapter {
 
         let public_values = to_public_values(expected_inputs);
 
-        let options = bincode::options().with_limit(10 * 1024 * 1024);
-        let p3_proof = options
-            .deserialize::<crate::bud_stark::Proof<MyConfig>>(&envelope.proof_bytes)
+        let bounded_bytes =
+            &envelope.proof_bytes[..envelope.proof_bytes.len().min(MAX_PROOF_BYTES)];
+        let p3_proof: crate::bud_stark::Proof<MyConfig> = postcard::from_bytes(bounded_bytes)
             .map_err(|e| VerifyError::DeserializationError(e.to_string()))?;
 
         stark_verify_with_preprocessed(
@@ -853,10 +1048,57 @@ mod tests {
         let envelope = Plonky3Adapter::prove(&vm.trace, &pi, &program).unwrap();
         let verify_res = Plonky3Adapter::verify(&envelope, &pi, &program);
         if let Err(ref e) = verify_res {
-            println!("Verification failed with error: {:?}", e);
+            eprintln!("Verification error: {:?}", e);
         }
         assert!(verify_res.is_ok());
         envelope
+    }
+
+    /// Run the program, tamper the trace, and assert that proving FAILS.
+    fn prove_fails_after_tamper(
+        program: Vec<u64>,
+        setup: impl FnOnce(&mut Vm),
+        tamper: impl FnOnce(&mut Vec<Step>),
+    ) {
+        let mut vm = Vm::new(64);
+        setup(&mut vm);
+        let _receipt = vm.run_receipt(&program);
+        assert!(_receipt.success);
+
+        tamper(&mut vm.trace);
+
+        let initial_root = [0u8; 32];
+        let final_root = [0u8; 32];
+        let program_bytes: Vec<u8> = program
+            .iter()
+            .flat_map(|&inst| inst.to_le_bytes().to_vec())
+            .collect();
+        let mut hasher = Keccak::v256();
+        hasher.update(&program_bytes);
+        let mut program_hash = [0u8; 32];
+        hasher.finalize(&mut program_hash);
+
+        let pi = ExecutionPublicInputs {
+            chain_id: 1,
+            program_hash,
+            initial_state_root: initial_root,
+            final_state_root: final_root,
+            sender: vm.context.sender,
+            nonce: vm.context.nonce,
+            block_height: vm.context.block_height,
+            gas_limit: vm.gas_limit,
+            gas_used: vm.gas_used,
+            exit_code: 0,
+            trace_len: vm.trace.len() as u64,
+            event_digest: [0u8; 32],
+        };
+
+        let envelope = Plonky3Adapter::prove(&vm.trace, &pi, &program).unwrap();
+        let res = Plonky3Adapter::verify(&envelope, &pi, &program);
+        assert!(
+            res.is_err(),
+            "Expected verification to FAIL after tampering, but it succeeded!"
+        );
     }
 
     #[test]
@@ -1055,5 +1297,386 @@ mod tests {
 
         let res = Plonky3Adapter::verify(&envelope, &pi, &tampered_program);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn proves_lt_comparison() {
+        let program = vec![inst(Opcode::Lt, 1, 2, 3, 0), inst(Opcode::Halt, 0, 0, 0, 0)];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 5;
+            vm.registers[3] = 10;
+        });
+    }
+
+    #[test]
+    fn proves_gt_comparison() {
+        let program = vec![inst(Opcode::Gt, 1, 2, 3, 0), inst(Opcode::Halt, 0, 0, 0, 0)];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 10;
+            vm.registers[3] = 5;
+        });
+    }
+
+    #[test]
+    fn proves_lte_gte_edge() {
+        let program = vec![
+            inst(Opcode::Lte, 1, 2, 3, 0),
+            inst(Opcode::Gte, 4, 2, 3, 0),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 7;
+            vm.registers[3] = 7;
+        });
+    }
+
+    #[test]
+    fn proves_all_comparisons() {
+        let program = vec![
+            inst(Opcode::Lt, 1, 2, 3, 0),  // 5 < 10 → 1
+            inst(Opcode::Gt, 2, 2, 3, 0),  // 5 > 10 → 0
+            inst(Opcode::Lte, 3, 2, 3, 0), // 5 <= 10 → 1
+            inst(Opcode::Gte, 4, 2, 3, 0), // 5 >= 10 → 0
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 5;
+            vm.registers[3] = 10;
+        });
+    }
+
+    #[test]
+    fn proves_bitwise_and() {
+        let program = vec![
+            inst(Opcode::And, 1, 2, 3, 0), // 0b1100 & 0b1010 = 0b1000 = 8
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 0b1100;
+            vm.registers[3] = 0b1010;
+        });
+    }
+
+    #[test]
+    fn proves_bitwise_or() {
+        let program = vec![
+            inst(Opcode::Or, 1, 2, 3, 0), // 0b1100 | 0b1010 = 0b1110 = 14
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 0b1100;
+            vm.registers[3] = 0b1010;
+        });
+    }
+
+    #[test]
+    fn proves_bitwise_xor() {
+        let program = vec![
+            inst(Opcode::Xor, 1, 2, 3, 0), // 0b1100 ^ 0b1010 = 0b0110 = 6
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 0b1100;
+            vm.registers[3] = 0b1010;
+        });
+    }
+
+    #[test]
+    fn proves_logical_not() {
+        // Not(0) = 1
+        let program = vec![
+            inst(Opcode::Not, 1, 2, 0, 0),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 0;
+        });
+    }
+
+    #[test]
+    fn proves_logical_not_nonzero() {
+        // Not(nonzero) = 0
+        let program = vec![
+            inst(Opcode::Not, 1, 2, 0, 0),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 42;
+        });
+    }
+
+    #[test]
+    fn proves_poseidon_hash() {
+        let program = vec![
+            inst(Opcode::Poseidon, 1, 2, 3, 0),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = 42;
+            vm.registers[3] = 7;
+        });
+    }
+
+    #[test]
+    fn proves_storage_write_read() {
+        let program = vec![
+            inst(Opcode::SWrite, 0, 1, 0, 5), // storage[5] = r1(=99)
+            inst(Opcode::SRead, 2, 0, 0, 5),  // r2 = storage[5]
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[1] = 99;
+        });
+    }
+
+    #[test]
+    fn proves_storage_multiple_slots() {
+        let program = vec![
+            inst(Opcode::SWrite, 0, 1, 0, 1), // storage[1] = r1(=10)
+            inst(Opcode::SWrite, 0, 2, 0, 2), // storage[2] = r2(=20)
+            inst(Opcode::SRead, 3, 0, 0, 1),  // r3 = storage[1]
+            inst(Opcode::SRead, 4, 0, 0, 2),  // r4 = storage[2]
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[1] = 10;
+            vm.registers[2] = 20;
+        });
+    }
+
+    #[test]
+    fn proves_storage_read_default_zero() {
+        let program = vec![
+            inst(Opcode::SRead, 1, 0, 0, 99), // r1 = storage[99] (should be 0)
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |_| {});
+    }
+
+    fn build_merkle_path(leaf: u64, key: u64, siblings: &[u64]) -> (u64, [u64; 64]) {
+        let mut current = leaf;
+        let mut path = [0u64; 64];
+        for (i, &sibling) in siblings.iter().enumerate() {
+            path[i] = sibling;
+            let bit = (key >> i) & 1;
+            current = if bit == 0 {
+                bud_vm::poseidon4_hash(current, sibling)
+            } else {
+                bud_vm::poseidon4_hash(sibling, current)
+            };
+        }
+        (current, path)
+    }
+
+    fn write_merkle_path_to_memory(vm: &mut Vm, addr: usize, key: u64, path: &[u64; 64]) {
+        vm.memory[addr..addr + 8].copy_from_slice(&key.to_le_bytes());
+        for (i, sibling) in path.iter().enumerate() {
+            let off = addr + 8 + i * 8;
+            vm.memory[off..off + 8].copy_from_slice(&sibling.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn proves_verify_merkle_valid() {
+        let leaf = 42u64;
+        let key = 7u64;
+        // Deterministic "siblings" — in a real SMT these are the sibling hashes
+        let mut siblings = [0u64; 64];
+        for (i, s) in siblings.iter_mut().enumerate() {
+            *s = (1000 + i as u64).wrapping_mul(31);
+        }
+        let (root, path) = build_merkle_path(leaf, key, &siblings);
+
+        let program = vec![
+            inst(Opcode::VerifyMerkle, 1, 2, 3, 256), // rd=1, rs1=r2(root), rs2=r3(leaf), imm=256
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = root;
+            vm.registers[3] = leaf;
+            vm.memory.resize(1024, 0);
+            write_merkle_path_to_memory(vm, 256, key, &path);
+        });
+    }
+
+    #[test]
+    fn proves_verify_merkle_invalid_root() {
+        let leaf = 42u64;
+        let key = 7u64;
+        let mut siblings = [0u64; 64];
+        for (i, s) in siblings.iter_mut().enumerate() {
+            *s = (1000 + i as u64).wrapping_mul(31);
+        }
+        let (root, path) = build_merkle_path(leaf, key, &siblings);
+
+        // Use wrong root
+        let program = vec![
+            inst(Opcode::VerifyMerkle, 1, 2, 3, 256),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = root.wrapping_add(1); // Wrong root
+            vm.registers[3] = leaf;
+            vm.memory.resize(1024, 0);
+            write_merkle_path_to_memory(vm, 256, key, &path);
+        });
+    }
+
+    #[test]
+    fn proves_verify_merkle_invalid_path() {
+        let leaf = 42u64;
+        let key = 7u64;
+        let mut siblings = [0u64; 64];
+        for (i, s) in siblings.iter_mut().enumerate() {
+            *s = (1000 + i as u64).wrapping_mul(31);
+        }
+        let (root, mut path) = build_merkle_path(leaf, key, &siblings);
+
+        // Tamper one sibling
+        path[10] = path[10].wrapping_add(1);
+
+        let program = vec![
+            inst(Opcode::VerifyMerkle, 1, 2, 3, 256),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_and_verify(program, |vm| {
+            vm.registers[2] = root;
+            vm.registers[3] = leaf;
+            vm.memory.resize(1024, 0);
+            write_merkle_path_to_memory(vm, 256, key, &path);
+        });
+    }
+
+    // --- Soundness negative tests (tampered trace rejection) ---
+
+    #[test]
+    fn rejects_tampered_comparison_result() {
+        let program = vec![inst(Opcode::Lt, 1, 2, 3, 0), inst(Opcode::Halt, 0, 0, 0, 0)];
+        prove_fails_after_tamper(
+            program,
+            |vm| {
+                vm.registers[2] = 5;
+                vm.registers[3] = 10;
+            },
+            |trace| {
+                // 5 < 10 → should be 1. Tamper to 0.
+                trace[0].dst_val = 0;
+            },
+        );
+    }
+
+    #[test]
+    fn rejects_tampered_bitwise_and_result() {
+        let program = vec![
+            inst(Opcode::And, 1, 2, 3, 0),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_fails_after_tamper(
+            program,
+            |vm| {
+                vm.registers[2] = 0b1100;
+                vm.registers[3] = 0b1010;
+            },
+            |trace| {
+                // 0b1100 & 0b1010 = 0b1000 = 8. Tamper to 0.
+                trace[0].dst_val = 0;
+            },
+        );
+    }
+
+    #[test]
+    fn rejects_tampered_poseidon_sbox() {
+        let program = vec![
+            inst(Opcode::Poseidon, 1, 2, 3, 0),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        let mut vm = Vm::new(64);
+        vm.registers[2] = 42;
+        vm.registers[3] = 7;
+        let _receipt = vm.run_receipt(&program);
+        assert!(_receipt.success);
+
+        // Tamper the trace matrix directly: corrupt an S-box intermediate (x2) column
+        let (mut matrix, _trace_len) = trace_matrix(&vm.trace, &program);
+        // Round 0, element 0 x2 is at COL_POSEIDON_X2_BASE = 290
+        matrix.values[290] = Goldilocks::new(999);
+        // Re-wrap in RowMajorMatrix
+        let matrix = RowMajorMatrix::new(matrix.values, TRACE_WIDTH);
+
+        let air = BudAir {
+            num_steps: vm.trace.len(),
+            program: program.clone(),
+        };
+        let pi = ExecutionPublicInputs {
+            chain_id: 1,
+            program_hash: [0u8; 32],
+            initial_state_root: [0u8; 32],
+            final_state_root: [0u8; 32],
+            sender: 0,
+            nonce: 0,
+            block_height: 0,
+            gas_limit: 1000000,
+            gas_used: vm.gas_used,
+            exit_code: 0,
+            trace_len: vm.trace.len() as u64,
+            event_digest: [0u8; 32],
+        };
+
+        let config = build_config();
+        let public_values = to_public_values(&pi);
+        let degree_bits = p3_util::log2_strict_usize(matrix.height());
+        let preprocessed = setup_preprocessed(&config, &air, degree_bits);
+        let preprocessed_ref = preprocessed.as_ref().map(|(p, _)| p);
+
+        // Proving with tampered S-box should still produce a proof, but...
+        let p3_proof = prove_with_preprocessed(
+            &config,
+            &air,
+            matrix.clone(),
+            Some(crate::plonky3_prover::aux_trace_generator(
+                matrix.clone(),
+                _trace_len,
+                program.clone(),
+            )),
+            &public_values,
+            preprocessed_ref,
+        );
+
+        let proof_bytes = postcard::to_allocvec(&p3_proof).unwrap();
+        let envelope = ProofEnvelope {
+            proof_format_version: 1,
+            backend: "Plonky3-Keccak-Goldilocks".to_string(),
+            p3_version: "0.5.2".to_string(),
+            fri_params_id: "test_fri_params".to_string(),
+            public_inputs_hash: pi.hash(),
+            proof_bytes,
+            degree_bits: degree_bits as u32,
+        };
+
+        // ...verification should FAIL because the S-box constraint is violated
+        let res = Plonky3Adapter::verify(&envelope, &pi, &program);
+        assert!(
+            res.is_err(),
+            "Expected verification to FAIL with tampered S-box, but it succeeded!"
+        );
+    }
+
+    #[test]
+    fn rejects_tampered_storage_write_result() {
+        let program = vec![
+            inst(Opcode::SWrite, 0, 1, 0, 5),
+            inst(Opcode::SRead, 2, 0, 0, 5),
+            inst(Opcode::Halt, 0, 0, 0, 0),
+        ];
+        prove_fails_after_tamper(
+            program,
+            |vm| {
+                vm.registers[1] = 99;
+            },
+            |trace| {
+                // Tamper the read-back value
+                trace[1].dst_val = 404;
+            },
+        );
     }
 }

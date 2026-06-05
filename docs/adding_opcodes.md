@@ -1,85 +1,115 @@
 # Adding an Opcode
 
-This guide is the contributor checklist for adding a BudVM opcode without breaking the ISA, VM,
-trace, AIR, and proof stack contract.
+Bu rehber, BudZKVM'e yeni bir opcode eklerken takip edilmesi gereken adımları checklist formatında sunar. Amaç, ISA, VM, trace, AIR ve proof stack sözleşmesini bozmadan, deterministik ve sound bir şekilde opcode eklemektir.
 
-## 1. Define the ISA Surface
+## Mevcut Durum
 
-Update `bud-isa/src/lib.rs`:
+BudZKVM'de **31 opcode** tanımlıdır. Bunlardan **30'u production** (AIR constraint'leri tamamlanmış), **1'i experimental** (`VerifyMerkle`) durumdadır. Production opcode'lar `default` feature ile derlendiğinde kullanılabilir; experimental opcode'lar `cfg(feature = "experimental")` gerektirir.
 
-- Add the opcode variant to `Opcode`.
-- Assign a stable discriminant.
-- Update `Instruction::decode` so the raw byte maps to the new variant.
-- Add or update encoding/decoding tests if the opcode changes bytecode behavior.
+## 1. ISA Yüzeyini Tanımla
 
-Keep the discriminant stable once bytecode artifacts may depend on it. If a value is experimental,
-document that status in `docs/02_isa_ve_bytecode.md`.
+`bud-isa/src/lib.rs` dosyasını güncelle:
 
-## 2. Implement VM Semantics
+- `Opcode` enum'una yeni varyant ekle.
+- Kararlı bir discriminant (0x1F'den başlayarak) ata.
+- `Instruction::decode_any()` metodunda raw byte → yeni varyant eşlemesini ekle.
+- Eğer opcode experimental olacaksa `Opcode::is_experimental()` listesine ekle.
+- Encoding/decoding testi yaz.
 
-Update `bud-vm/src/lib.rs`:
+**Kural:** Bytecode artifact'ları bu discriminant'a bağımlı olabileceği için discriminant'ı kararlı tut. Değer experimental ise bu durumu `docs/02_isa_ve_bytecode.md` dosyasında belgele.
 
-- Add the opcode arm in `Vm::step`.
-- Define register reads, register writes, `dst_val`, and `next_pc`.
-- Decide how the opcode interacts with memory, storage, stack, gas, and halt behavior.
-- Add VM tests for normal behavior and edge cases.
+## 2. VM Semantiğini Uygula
 
-The VM trace must contain enough information for the AIR to verify the step. If the AIR needs a
-new witness value, add it to `Step` and the trace matrix deliberately.
+`bud-vm/src/lib.rs` dosyasını güncelle:
 
-## 3. Emit It From the Compiler or CLI
+- `Vm::step()` metodunda yeni opcode için bir kol (arm) ekle.
+- Register okumalarını, register yazmalarını, `dst_val` ve `next_pc`'i tanımla.
+- Opcode'un memory, storage, stack, gas ve halt davranışıyla nasıl etkileştiğine karar ver.
+- `Vm::gas_cost()` metodunda gas maliyetini belirle.
+- Normal davranış ve edge case'ler için VM testleri ekle.
 
-If the opcode is user-facing, update the compiler pipeline:
+VM trace'i, AIR'in bu adımı doğrulayabilmesi için yeterli bilgi içermelidir. Eğer AIR'in yeni bir witness değerine ihtiyacı varsa, bunu `Step` struct'ına ve trace matrix'e bilinçli olarak ekle.
 
-- Parser/AST changes in `bud-compiler/src/ast.rs` and `parser.rs`.
-- Semantic validation in `bud-compiler/src/sema.rs`.
-- Bytecode generation in `bud-compiler/src/codegen.rs`.
-- CLI examples or fixtures when helpful.
+## 3. Derleyici veya CLI'dan Yayınla
 
-Opcodes can exist in the VM before the language exposes them, but the docs should say whether the
-opcode is internal, experimental, or stable.
+Eğer opcode kullanıcıya dönükse, derleyici pipeline'ını güncelle:
 
-## 4. Add Trace Columns or Selectors
+- `bud-compiler/src/ast.rs` ve `parser.rs`: AST/payload değişiklikleri.
+- `bud-compiler/src/sema.rs`: Semantik doğrulama.
+- `bud-compiler/src/codegen.rs`: Bytecode üretimi.
+- Gerekirse CLI örnekleri veya fixture'lar.
 
-Update `bud-proof/src/plonky3_air.rs` and `bud-proof/src/plonky3_prover.rs`:
+Opcode'lar dil tarafından sunulmadan önce VM'de var olabilir, ancak dokümanlar opcode'un internal, experimental veya stable olduğunu belirtmelidir.
 
-- Add selector columns only when existing selectors cannot represent the opcode.
-- Populate the selector in `trace_matrix`.
-- Populate any new witness columns.
-- Keep trace padding and halt rows consistent.
-- Update register, memory, or lookup events if the opcode introduces new reads/writes.
+## 4. Trace Sütunları veya Selector'lar Ekle
 
-Every new column should have a clear meaning in the trace schema docs before it becomes stable.
+`bud-proof/src/plonky3_air.rs` ve `bud-proof/src/plonky3_prover.rs` dosyalarını güncelle:
 
-## 5. Add AIR Constraints
+- Yalnızca mevcut selector'lar opcode'u temsil edemiyorsa yeni selector sütunu ekle.
+- `trace_matrix()` fonksiyonunda selector'ü doldur.
+- Yeni witness sütunlarını doldur.
+- Trace padding ve halt satırlarını tutarlı tut.
+- Opcode yeni okuma/yazma getiriyorsa register, memory veya lookup event'lerini güncelle.
 
-In `BudAir::eval`:
+**Mevcut trace genişliği: 354 sütun.** Yeni sütunları şu gruplardan sonra ekle:
+- 0-64: Temel + Selector + Register + Memory + Soundness
+- 65-257: Comparison + Bitwise witness
+- 258-353: Poseidon witness
 
-- Gate opcode-specific equations with the opcode selector.
-- Constrain `next_pc` behavior.
-- Constrain destination values and side effects.
-- Add boolean/range constraints when a value is meant to be small or binary.
-- Update permutation/lookup constraints if the opcode reads or writes shared tables.
+Her yeni sütun, kararlı hale gelmeden önce trace schema dokümanında (`docs/vm_trace_schema.md`) net bir anlama sahip olmalıdır.
 
-The constraint must reject a tampered trace, not just accept the honest trace.
+## 5. AIR Constraint'lerini Ekle
 
-## 6. Add Tests
+`BudAir::eval()` içinde:
 
-At minimum:
+- Opcode'a özgü denklemleri opcode selector'ü ile gate'le (`builder.when(is_my_opcode)`).
+- `next_pc` davranışını constrain et.
+- Hedef değerleri ve yan etkileri constrain et.
+- Değer küçük veya binary olacaksa boolean/range constraint ekle.
+- Opcode ortak tabloları okuyor veya yazıyorsa permutation/lookup constraint'lerini güncelle.
 
-- `bud-isa` encoding/decoding coverage for the opcode.
-- `bud-vm` execution coverage.
-- `bud-proof` positive prover test.
-- A negative prover/verifier test when the AIR is meant to reject a tampered witness.
-- Compiler snapshot or integration test if BudL emits the opcode.
+**Kritik kural:** Constraint sadece dürüst trace'i kabul etmemeli, tahrif edilmiş trace'i de **reddetmelidir**. Her constraint için negatif test yaz.
 
-## 7. Update Documentation
+## 6. Test Ekle
 
-Update:
+Minimum:
 
-- `README.md` roadmap status if the opcode closes a roadmap item.
-- `docs/02_isa_ve_bytecode.md` for opcode format and stability.
-- `docs/03_virtual_machine.md` for VM semantics when needed.
-- `docs/05_stark_ve_plonky3.md` or `docs/07_prover_stabilizasyonu_ve_testler.md` for AIR/prover behavior.
+- `bud-isa`: Opcode için encoding/decoding coverage.
+- `bud-vm`: Execution coverage (normal + edge case).
+- `bud-proof`: Pozitif prover testi (prove + verify).
+- AIR tahrif edilmiş witness'ı reddetmesi gerekiyorsa negatif prover/verifier testi.
+- BudL opcode'u üretiyorsa compiler snapshot veya entegrasyon testi.
 
-Run the local CI equivalent from `docs/development.md` before sending the change.
+Test pattern'i (bud-proof):
+```rust
+#[test]
+fn proves_my_new_opcode() {
+    let program = vec![
+        inst(Opcode::MyNewOpcode, 1, 2, 3, 0),
+        inst(Opcode::Halt, 0, 0, 0, 0),
+    ];
+    prove_and_verify(program, |vm| {
+        vm.registers[2] = input_a;
+        vm.registers[3] = input_b;
+    });
+}
+```
+
+## 7. Dokümantasyonu Güncelle
+
+Güncellenmesi gereken dosyalar:
+
+- `docs/02_isa_ve_bytecode.md` — Opcode formatı, discriminant ve stabilite durumu.
+- `docs/vm_trace_schema.md` — Yeni trace sütunları eklendiyse.
+- `docs/03_virtual_machine.md` — VM semantiği değiştiyse.
+- `docs/09_faz0_stabilizasyon.md` — Yeni production opcode'u eklendiyse.
+- `README.md` — Roadmap durumu.
+
+Değişikliği göndermeden önce `docs/development.md`'deki yerel CI eşdeğerini çalıştır:
+
+```bash
+nix develop --command cargo fmt --all -- --check
+nix develop --command cargo check --workspace --all-targets
+nix develop --command cargo clippy --workspace --all-targets -- -D warnings
+nix develop --command cargo test --workspace
+```

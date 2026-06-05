@@ -51,7 +51,9 @@ impl<'a> Parser<'a> {
         let name = if let Token::Ident(name) = self.consume() {
             name
         } else {
-            return Err(CompileError::ParserError("Expected contract name".to_string()));
+            return Err(CompileError::ParserError(
+                "Expected contract name".to_string(),
+            ));
         };
 
         self.expect(Token::BraceOpen)?;
@@ -78,13 +80,17 @@ impl<'a> Parser<'a> {
                                 let k = if let Token::Ident(k) = self.consume() {
                                     k
                                 } else {
-                                    return Err(CompileError::ParserError("Expected map key type".to_string()));
+                                    return Err(CompileError::ParserError(
+                                        "Expected map key type".to_string(),
+                                    ));
                                 };
                                 self.expect(Token::Comma)?;
                                 let v = if let Token::Ident(v) = self.consume() {
                                     v
                                 } else {
-                                    return Err(CompileError::ParserError("Expected map value type".to_string()));
+                                    return Err(CompileError::ParserError(
+                                        "Expected map value type".to_string(),
+                                    ));
                                 };
                                 self.expect(Token::Gt)?;
                                 format!("Map<{},{}>", k, v)
@@ -156,7 +162,9 @@ impl<'a> Parser<'a> {
         let name = if let Token::Ident(name) = self.consume() {
             name
         } else {
-            return Err(CompileError::ParserError("Expected function name".to_string()));
+            return Err(CompileError::ParserError(
+                "Expected function name".to_string(),
+            ));
         };
 
         self.expect(Token::ParenOpen)?;
@@ -202,7 +210,9 @@ impl<'a> Parser<'a> {
                 let name = if let Token::Ident(name) = self.consume() {
                     name
                 } else {
-                    return Err(CompileError::ParserError("Expected identifier after let".to_string()));
+                    return Err(CompileError::ParserError(
+                        "Expected identifier after let".to_string(),
+                    ));
                 };
                 self.expect(Token::Assign)?;
                 let expr = self.parse_expr()?;
@@ -274,7 +284,9 @@ impl<'a> Parser<'a> {
                 let var = if let Token::Ident(name) = self.consume() {
                     name
                 } else {
-                    return Err(CompileError::ParserError("Expected loop variable after for".to_string()));
+                    return Err(CompileError::ParserError(
+                        "Expected loop variable after for".to_string(),
+                    ));
                 };
                 self.expect(Token::In)?;
                 let start = self.parse_expr()?;
@@ -374,10 +386,7 @@ impl<'a> Parser<'a> {
     fn parse_arith(&mut self) -> Result<Expr, CompileError> {
         let mut left = self.parse_term()?;
 
-        while matches!(
-            self.peek(),
-            Token::Plus | Token::Minus
-        ) {
+        while matches!(self.peek(), Token::Plus | Token::Minus) {
             let op = match self.consume() {
                 Token::Plus => BinOp::Add,
                 Token::Minus => BinOp::Sub,
@@ -393,10 +402,7 @@ impl<'a> Parser<'a> {
     fn parse_term(&mut self) -> Result<Expr, CompileError> {
         let mut left = self.parse_primary()?;
 
-        while matches!(
-            self.peek(),
-            Token::Star | Token::Slash
-        ) {
+        while matches!(self.peek(), Token::Star | Token::Slash) {
             let op = match self.consume() {
                 Token::Star => BinOp::Mul,
                 Token::Slash => BinOp::Div,
@@ -466,7 +472,10 @@ impl<'a> Parser<'a> {
                     self.expect(Token::Comma)?;
                     let path = self.parse_expr()?;
                     self.expect(Token::ParenClose)?;
-                    Ok(Expr::Call("verify_merkle_proof".to_string(), vec![root, leaf, path]))
+                    Ok(Expr::Call(
+                        "verify_merkle_proof".to_string(),
+                        vec![root, leaf, path],
+                    ))
                 } else if self.peek() == &Token::BracketOpen {
                     self.consume();
                     let key = self.parse_expr()?;
@@ -486,7 +495,9 @@ impl<'a> Parser<'a> {
                 };
                 Ok(Expr::StorageRead(name))
             }
-            _ => Err(CompileError::ParserError("Expected primary expression".to_string())),
+            _ => Err(CompileError::ParserError(
+                "Expected primary expression".to_string(),
+            )),
         }
     }
 }

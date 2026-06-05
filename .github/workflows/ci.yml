@@ -69,3 +69,17 @@ jobs:
 
       - name: Check local Markdown links
         run: nix develop --command python3 scripts/check_docs_links.py
+
+  deny:
+    name: License & Advisory Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Check licenses and advisories
+        run: cargo deny check

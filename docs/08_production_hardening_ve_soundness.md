@@ -239,9 +239,16 @@ Bu negatif testlerin yeşil geçmesi (yani ispatın başarısız olması), AIR k
 
 BudZKVM'i sıfırdan inşa ederken ve üretime hazırlarken uyguladığımız bu adımlar, onu sadece çalışan bir VM olmaktan çıkarıp, finansal düzeyde güvenlik sunan bir ZKVM haline getirmiştir. Bir ZKVM tasarlarken veya incelerken şu checklist her zaman elinizin altında olmalıdır:
 
-1. **[ ] R0 Koruması:** `R0` yazmacına yapılan her türlü yazma işleminin cebirsel olarak `0` değerine zorlandığından emin olun.
-2. **[ ] Padding İzolasyonu:** HALT satırlarından sonraki dolgu satırlarının LogUp CTL/lookup terimlerini kirletmediğini aktiflik selectorleri ile doğrulayın.
-3. **[ ] Aritmetik Ters Elemanlar:** Sıfır dışılık gerektiren dallanma ve bölme kurallarında ters eleman tanığının ($v$) cebirsel denklemlerle kilitlendiğinden emin olun.
-4. **[ ] Public Input Bağlayıcılığı:** Girdilerin Keccak256 hash'inin transcript'e tohum (seed) olarak beslendiğini doğrulayın.
-5. **[ ] Deserialization Güvenliği:** Byte çözme işlemlerinde DoS saldırılarını önlemek için boyut sınırları (bounded decoders) uygulayın.
-6. **[ ] Negatif Testler:** Kritik AIR kurallarını tahrif eden negatif testler yazarak verifier'ın bunları reddettiğini kod düzeyinde kanıtlayın.
+1. **[x] R0 Koruması:** `R0` yazmacına yapılan her türlü yazma işleminin cebirsel olarak `0` değerine zorlandığından emin olun.
+2. **[x] Padding İzolasyonu:** HALT satırlarından sonraki dolgu satırlarının LogUp CTL/lookup terimlerini kirletmediğini aktiflik selectorleri ile doğrulayın.
+3. **[x] Aritmetik Ters Elemanlar:** Sıfır dışılık gerektiren dallanma ve bölme kurallarında ters eleman tanığının ($v$) cebirsel denklemlerle kilitlendiğinden emin olun.
+4. **[x] Public Input Bağlayıcılığı:** Girdilerin Keccak256 hash'inin transcript'e tohum (seed) olarak beslendiğini doğrulayın.
+5. **[x] Deserialization Güvenliği:** Byte çözme işlemlerinde DoS saldırılarını önlemek için boyut sınırları (bounded decoders) uygulayın. (postcard + MAX_PROOF_BYTES)
+6. **[x] Negatif Testler:** Kritik AIR kurallarını tahrif eden negatif testler yazarak verifier'ın bunları reddettiğini kod düzeyinde kanıtlayın. (8 negatif test)
+7. **[x] Comparison Soundness:** 64-bit decomposition + equality prefix flags ile Lt/Gt/Lte/Gte constraint'leri.
+8. **[x] Bitwise Soundness:** Bit decomposition + cebirsel esdegerlik ile And/Or/Xor/Not constraint'leri.
+9. **[x] Hash Soundness:** Poseidon4 (alpha=7, Goldilocks) ile deterministik hash, round 0 S-box AIR dogrulamasi.
+10. **[x] Storage Soundness:** STORAGE_BASE adresleme ile memory LogUp'a dahil edilmis storage consistency.
+11. **[x] Merkle Soundness:** poseidon4_hash tabanli 64-depth Merkle dogrulama, boolean output constraint.
+
+> **Faz 0 Tamamlandi (2026):** Tum checklist maddeleri karsilanmistir. 31 opcode production-ready, 51 test (8 negatif dahil). Detayli dokumantasyon icin [Bolum 9: Faz 0 Stabilizasyonu](09_faz0_stabilizasyon.md).

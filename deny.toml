@@ -42,7 +42,4 @@ vulnerability = "deny"
 unmaintained = "warn"
 unsound = "warn"
 notice = "warn"
-ignore = [
-    # Bincode 1.3 unmaintained advisory (we serialize bounded sizes in proof envelope)
-    "RUSTSEC-2020-0159",
-]
+ignore = []

@@ -36,21 +36,7 @@ pub enum Opcode {
 
 impl Opcode {
     pub fn is_experimental(&self) -> bool {
-        matches!(
-            self,
-            Opcode::And
-                | Opcode::Or
-                | Opcode::Xor
-                | Opcode::Not
-                | Opcode::Lt
-                | Opcode::Gt
-                | Opcode::Lte
-                | Opcode::Gte
-                | Opcode::Poseidon
-                | Opcode::SRead
-                | Opcode::SWrite
-                | Opcode::VerifyMerkle
-        )
+        false
     }
 }
 

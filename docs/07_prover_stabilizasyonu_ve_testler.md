@@ -59,7 +59,7 @@ BudZKVM'de çözüm, serde sınırlarını açık yazmaktır. Proof şu mantıkl
 * Challenge tipi serialize edilebiliyorsa opened values serialize edilebilir.
 * PCS proof tipi serialize edilebiliyorsa tüm kanıt byte dizisine çevrilebilir.
 
-Bu yaklaşım `bincode` desteğini geri getirir ve CLI/L1 entegrasyonu için gereken proof taşıma katmanını sadeleştirir. Proof formatının daha sonra kalıcı bir wire format haline gelmesi istenirse bu dosya doğal sınır noktasıdır.
+Bu yaklaşım `postcard` desteğini getirir ve CLI/L1 entegrasyonu için gereken proof taşıma katmanını sadeleştirir. Proof formatının daha sonra kalıcı bir wire format haline gelmesi istenirse bu dosya doğal sınır noktasıdır.
 
 ## Faz 2: Ana Trace ve Yardımcı Trace
 
@@ -72,10 +72,11 @@ BudZKVM prover mimarisi iki fazlıdır:
 
 Bu yapı cross-table lookup ve permutation kuralları için gereklidir. Örneğin CPU tablosundaki bir register okuması, register event tablosundaki önceki yazma ile bağlanmak istediğinde sadece ana trace yeterli olmaz. Lookup accumulator değerleri challenge'a bağlı olarak auxiliary trace içinde taşınır.
 
-Güncel stabilizasyon aşamasında auxiliary trace, **LogUp (Fractional Sums)** mimarisine geçirilmiştir. Adapter tarafındaki `generate_aux_trace` fonksiyonu Fiat-Shamir randomness değerlerini ($\alpha, \beta, \gamma$) alır ve kesirli toplamları içeren iki ana sütun üretir:
+Güncel stabilizasyon aşamasında auxiliary trace, **LogUp (Fractional Sums)** mimarisine geçirilmiştir. Adapter tarafındaki `generate_aux_trace` fonksiyonu Fiat-Shamir randomness değerlerini ($\alpha, \beta, \gamma$) alır ve kesirli toplamları içeren **üç ana sütun** üretir:
 
-* **Register Accumulator:** Her CPU satırındaki `rs1`, `rs2` okumasını ve `rd` yazmasını paydadaki birer kesirli terim olarak eklerken, register event tablosundaki karşılıklarını çıkarır. İşlem sırasında `BudVM`'in `R0` (sıfır yazmacı) davranışına dikkat edilmesi gerekir. Çünkü `R0` donanımsal olarak sıfıra sabitlenmiştir, bu nedenle opcode `rd=0` olarak bir değer dönse bile trace'e gerçekte `0` olarak yansıtılır.
-* **Memory Accumulator:** Benzer mantıkla CPU bellek erişimleri ile hafıza tablosu arasındaki tutarlılığı sağlar. Yığın (Stack) operasyonları (`PUSH`, `POP`, `CALL`, `RET`) doğrudan bellek etkileşimleridir ve LogUp matrisinde doğru kontrol akışı kısıtlamalarına (`COL_NEXT_PC` vb.) ihtiyaç duyarlar.
+* **Register Accumulator (S_REG):** Her CPU satırındaki `rs1`, `rs2` okumasını ve `rd` yazmasını paydadaki birer kesirli terim olarak eklerken, register event tablosundaki karşılıklarını çıkarır. `R0` donanımsal olarak sıfıra sabitlenmiştir; `dst_idx == 0` olan satırlarda `dst_val` trace'te `0` olarak zorlanır.
+* **Memory Accumulator (S_MEM):** CPU bellek erişimleri (`Load`, `Store`, `Push`, `Pop`, `Call`, `Ret`) ile hafıza tablosu arasındaki tutarlılığı sağlar. Buna ek olarak **storage işlemlerini de kapsar** (`SRead`, `SWrite`). Storage, `STORAGE_BASE = 2 << 60` adres ön eki ile memory adres alanına yerleştirilir — bu sayede ayrı bir LogUp tablosu gerekmez.
+* **Program Accumulator (S_PROG):** CPU'nun `(pc, instruction)` çiftlerini, preprocessed program tablosundaki `(pc, instruction)` çiftleriyle eşleştirir. Yalnızca `CPU_ACTIVE = 1` olan satırlar LogUp kümesine dahil edilir; padding satırları dışlanır.
 
 Bu geçiş, kısıt derecesini düşürerek kanıt üretim süresini optimize etmiş ve hafıza bütünlüğü (Memory Integrity) için gereken altyapıyı tamamlamıştır. Auxiliary trace artık transcript challenge'larına bağlı gerçek witness verisi taşır ve AIR bu geçişleri `when_transition`, `when_first_row` ve `when_last_row` kısıtlarıyla tam doğrular.
 
@@ -119,7 +120,7 @@ Kanıt üretimi şu sırayla akar:
 3. `BudAir` program ve başlangıç register durumuyla kurulur.
 4. `StarkConfig` oluşturulur.
 5. `prove` çağrısı main trace, auxiliary generator ve public input ile çalıştırılır.
-6. Dönen proof `bincode` ile byte dizisine çevrilir.
+6. Dönen proof `postcard` ile byte dizisine çevrilir (bounded deserialization, DoS korumalı).
 
 Doğrulama tarafında akış tersine döner:
 
@@ -153,29 +154,39 @@ Bu testler matematiksel güvenliği tek başına kanıtlamaz, ama prover entegra
 
 ## Bugün Stabil Olan Parçalar
 
-Mevcut stabilizasyon çalışmasıyla hedeflenen taban şudur:
+Faz 0 stabilizasyonu sonrası mevcut durum:
 
-* `cargo check` prover crate'i dahil temiz çalışır.
-* `bud-proof` testleri Goldilocks field üzerinde proof üretip doğrular.
-* Proof byte dizisi `bincode` üzerinden taşınabilir.
+* `cargo check --workspace --all-targets` temiz.
+* `cargo clippy --workspace --all-targets -- -D warnings` temiz.
+* `cargo test --workspace` → 44 test, 0 failure.
+* `bud-proof` testleri Goldilocks field üzerinde 29 unit test + 1 integration test ile proof üretip doğrular.
+* Proof byte dizisi `postcard` üzerinden taşınabilir (bounded deserialization, DoS korumalı).
 * Main trace ve auxiliary trace için folder iskeleti aynı AIR'e bağlanır.
-* Auxiliary trace hem register hem de memory accumulator sütunlarını üretir; AIR bu sütunların geçişlerini ve sınır kısıtlarını (`when_first_row`, `when_last_row`) denetler.
-* Memory STARK altyapısı aktiftir; `Load`, `Store` işlemlerinin yanı sıra karmaşık iç içe (nested) `CALL`, `RET`, `PUSH` ve `POP` işlemleri CTL (Cross-Table Lookup) ile tam doğrulanmaktadır.
-* STARK'taki geçiş anormalliklerini ve `OodEvaluationMismatch` hatalarını tetikleyen `R0` hayalet yazma hataları çözülmüştür.
-* Sub builder yeni pencere API'siyle uyumludur.
-* Phase 0 geliştirme hijyeni için komut matrisi, CI workflow'u, opcode katkı rehberi, proof-format checklist'i ve yerel Markdown link checker bulunur.
+* Auxiliary trace 3 sütun üretir: register, memory+storage, program LogUp akümülatörleri.
+* Memory STARK altyapısı aktiftir; `Load`, `Store`, `SRead`, `SWrite`, `Push`, `Pop`, `Call`, `Ret` CTL ile tam doğrulanır.
+* Comparison opcode'ları (Lt, Gt, Lte, Gte) 64-bit decomposition + equality prefix flags ile sound.
+* Bitwise opcode'ları (And, Or, Xor, Not) bit decomposition + cebirsel eşdeğerlik ile sound.
+* Poseidon hash (4 round, alpha=7, Goldilocks) deterministik ve round 0 S-box AIR-doğrulanır.
+* Storage tutarlılığı STORAGE_BASE adresleme ile memory LogUp üzerinden doğrulanır.
+* R0 koruması, padding izolasyonu, inverse witness'lar, public input hash bağlama ve bounded deserialization tamam.
+* CI workflow'u (fmt, check, clippy, test, docs), opcode katkı rehberi, proof-format checklist'i ve trace schema dokümanı mevcut.
 
-Bu noktadan sonra yapılacak işler daha hedeflidir. Derleyici ve prover tamamen stabildir. Artık odak noktası bitwise (bitsel) operasyonların LUT (Look-up Table) veya bit-decomposition ile STARK içerisine dahil edilmesidir.
+Bu noktadan sonra yapılacak işler:
+
+* `VerifyMerkle` opcode'unun tam AIR constraint'i ve production'a taşınması.
+* Poseidon multi-round AIR doğrulaması.
+* Recursive proof aggregation.
+* Verifier WASM/EVM target'ları.
+* BudL dilinde struct, mapping ve standart kütüphane desteği.
+* `bud-node` ağ katmanı ve JSON-RPC API.
 
 ## Sıradaki Sertleştirme Adımları
 
-Stabil tabanın üstüne şu işler eklenmelidir:
+Faz 0 sonrası sıradaki adımlar:
 
-* CPU ve register accumulator'larının final equality koşulunu netleştirmek.
-* CPU, register ve memory tabloları arasında cross-table lookup kurallarının (LogUp) verimliliğini artırmak.
+* VerifyMerkle opcode'unu production'a taşımak (Adım 0.6).
+* Tracing/logging altyapısını tüm pipeline'a entegre etmek (Adım 0.7).
+* Kapsamlı negatif test suite ve CI genişletme (Adım 0.8).
+* Poseidon'un tüm round'ları için AIR doğrulaması.
 * Public input bağlamını netleştirmek: program hash, başlangıç state'i ve final state proof'a bağlanmalı.
-* `COL_IS_HALT` kısıtını ayrıca denetlemek: halt sonrası satırlar program sonunu zayıflatmamalı.
-* Bitwise opcode'ların field içinde boolean decomposition kurallarını tamamlamak.
 * Proof formatını uzun vadeli uyumluluk için versiyonlamak.
-
-Bu işler bittikçe Bölüm 5'teki AIR açıklaması daha matematiksel, bu bölümdeki stabilizasyon notları ise daha operasyonel kalmalıdır. Böylece kitap hem ZKVM mimarisini öğrenen okuyucuya hem de BudZKVM kodunu geliştiren kişiye aynı anda hizmet eder.

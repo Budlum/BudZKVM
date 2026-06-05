@@ -5,11 +5,22 @@ use bud_vm::Vm;
 use clap::{Parser, Subcommand};
 use std::fs;
 use tiny_keccak::{Hasher, Keccak};
+use tracing::{debug, info};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(author, version, about = "BudZKVM Command Line Interface", long_about = "A production-grade, high-performance toolchain for compiling, executing, proving, and verifying BudZKVM smart contracts.")]
+#[command(
+    author,
+    version,
+    about = "BudZKVM Command Line Interface",
+    long_about = "A production-grade, high-performance toolchain for compiling, executing, proving, and verifying BudZKVM smart contracts."
+)]
 struct Cli {
-    #[arg(long, default_value_t = 1, help = "The unique chain identifier for execution context")]
+    #[arg(
+        long,
+        default_value_t = 1,
+        help = "The unique chain identifier for execution context"
+    )]
     chain_id: u64,
 
     #[command(subcommand)]
@@ -18,7 +29,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    #[command(about = "Compile, execute, prove, verify, and commit state transitions for a BudL program")]
+    #[command(
+        about = "Compile, execute, prove, verify, and commit state transitions for a BudL program"
+    )]
     Run {
         #[arg(short, long, help = "Path to the .bud source contract file")]
         program: String,
@@ -34,11 +47,17 @@ enum Commands {
         json: bool,
         #[arg(long, help = "File path to write the generated STARK proof envelope")]
         proof_out: Option<String>,
-        #[arg(long, help = "File path to write the generated execution public inputs JSON")]
+        #[arg(
+            long,
+            help = "File path to write the generated execution public inputs JSON"
+        )]
         public_inputs_out: Option<String>,
         #[arg(long, help = "Path to load state from (defaults to state.json)")]
         state_in: Option<String>,
-        #[arg(long, help = "Path to write the updated state to (defaults to state_in)")]
+        #[arg(
+            long,
+            help = "Path to write the updated state to (defaults to state_in)"
+        )]
         state_out: Option<String>,
     },
     #[command(about = "Compile and generate a STARK proof for a program without committing state")]
@@ -55,10 +74,15 @@ enum Commands {
         args: Vec<u64>,
         #[arg(long, help = "File path to write the generated STARK proof envelope")]
         proof_out: String,
-        #[arg(long, help = "File path to write the generated execution public inputs JSON")]
+        #[arg(
+            long,
+            help = "File path to write the generated execution public inputs JSON"
+        )]
         public_inputs_out: Option<String>,
     },
-    #[command(about = "Execute, prove, verify, and commit state for a batch of programs sequentially")]
+    #[command(
+        about = "Execute, prove, verify, and commit state for a batch of programs sequentially"
+    )]
     Batch {
         #[arg(short, long, help = "List of paths to .bud source files in the batch")]
         programs: Vec<String>,
@@ -75,7 +99,11 @@ enum Commands {
     Deploy {
         #[arg(short, long, help = "Path to the .bud source contract file")]
         program: String,
-        #[arg(short, long, help = "Optional output file path (defaults to <program>.budc)")]
+        #[arg(
+            short,
+            long,
+            help = "Optional output file path (defaults to <program>.budc)"
+        )]
         output: Option<String>,
     },
     #[command(about = "Load compiled bytecode, execute, prove, and commit state transitions")]
@@ -89,13 +117,19 @@ enum Commands {
         #[arg(short, long, help = "Arguments to pass to the main function")]
         args: Vec<u64>,
     },
-    #[command(about = "Verify a generated STARK proof envelope against public inputs and program bytecode")]
+    #[command(
+        about = "Verify a generated STARK proof envelope against public inputs and program bytecode"
+    )]
     Verify {
         #[arg(short, long, help = "Path to the STARK proof envelope JSON file")]
         proof_file: String,
         #[arg(short, long, help = "Path to the execution public inputs JSON file")]
         public_inputs_file: String,
-        #[arg(short, long, help = "Path to the compiled program bytecode (.budc or hex bytes)")]
+        #[arg(
+            short,
+            long,
+            help = "Path to the compiled program bytecode (.budc or hex bytes)"
+        )]
         bytecode_file: String,
     },
     #[command(about = "Run hardcoded smoke test of BudZKVM execution engine")]
@@ -134,9 +168,13 @@ struct ExecutionOutput {
 fn run_pipeline(config: ExecutionConfig) -> Result<ExecutionOutput, Box<dyn std::error::Error>> {
     use bud_state::StateBackend;
 
-    let state_file = config.state_in_file.unwrap_or_else(|| "state.json".to_string());
-    let mut state = bud_state::State::load(&state_file)
-        .map_err(|e| format!("Failed to load state: {}", e))?;
+    debug!("Starting pipeline");
+
+    let state_file = config
+        .state_in_file
+        .unwrap_or_else(|| "state.json".to_string());
+    let mut state =
+        bud_state::State::load(&state_file).map_err(|e| format!("Failed to load state: {}", e))?;
     let pre_root = state.root();
 
     let mut vm = Vm::new(1024);
@@ -175,11 +213,19 @@ fn run_pipeline(config: ExecutionConfig) -> Result<ExecutionOutput, Box<dyn std:
         return Err(format!("Execution failed deterministically: {:?}", receipt.error).into());
     }
 
+    debug!(
+        gas_used = receipt.gas_used,
+        trace_len = receipt.trace_len,
+        "VM execution complete"
+    );
+
     // Apply state updates in memory if committing
     if config.commit_state {
         state.begin_transaction();
         if let Some(s) = config.sender {
-            let mut acc = state.get_account(s).ok_or("Sender account not found in state")?;
+            let mut acc = state
+                .get_account(s)
+                .ok_or("Sender account not found in state")?;
             acc.nonce += 1;
             state.set_account(s, acc);
         }
@@ -192,7 +238,8 @@ fn run_pipeline(config: ExecutionConfig) -> Result<ExecutionOutput, Box<dyn std:
     };
 
     // Construct ExecutionPublicInputs
-    let bytecode_bytes: Vec<u8> = config.bytecode
+    let bytecode_bytes: Vec<u8> = config
+        .bytecode
         .iter()
         .flat_map(|&b| b.to_le_bytes().to_vec())
         .collect();
@@ -221,8 +268,12 @@ fn run_pipeline(config: ExecutionConfig) -> Result<ExecutionOutput, Box<dyn std:
     };
 
     // Prove and Verify
+    info!("Generating STARK proof...");
     let envelope = Prover::prove(&vm.trace, &pi, &config.bytecode)
         .map_err(|e| format!("Failed to generate proof: {:?}", e))?;
+    info!(proof_bytes = envelope.proof_bytes.len(), "Proof generated");
+
+    info!("Verifying proof...");
     let ok = Prover::verify(&envelope, &pi, &config.bytecode).is_ok();
 
     if !ok {
@@ -232,7 +283,9 @@ fn run_pipeline(config: ExecutionConfig) -> Result<ExecutionOutput, Box<dyn std:
         return Err("Verification of generated proof failed!".into());
     } else {
         if config.commit_state {
-            state.commit().map_err(|e| format!("Failed to commit transaction: {}", e))?;
+            state
+                .commit()
+                .map_err(|e| format!("Failed to commit transaction: {}", e))?;
         }
     }
 
@@ -248,6 +301,10 @@ fn run_pipeline(config: ExecutionConfig) -> Result<ExecutionOutput, Box<dyn std:
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
     let cli = Cli::parse();
 
     match &cli.command {
@@ -286,10 +343,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })?;
 
             // ATOMIC STATE SAVE
-            let save_file = state_out.clone().unwrap_or_else(|| {
-                state_in.clone().unwrap_or_else(|| "state.json".to_string())
-            });
-            out.state.save_to(&save_file)
+            let save_file = state_out
+                .clone()
+                .unwrap_or_else(|| state_in.clone().unwrap_or_else(|| "state.json".to_string()));
+            out.state
+                .save_to(&save_file)
                 .map_err(|e| format!("Failed to save state: {}", e))?;
 
             if *json {
@@ -311,8 +369,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(path) = proof_out {
                 let data = serde_json::to_string_pretty(&out.envelope)
                     .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
-                fs::write(path, data)
-                    .map_err(|e| format!("Failed to write proof file: {}", e))?;
+                fs::write(path, data).map_err(|e| format!("Failed to write proof file: {}", e))?;
                 println!("Proof envelope written to {}", path);
             }
 
@@ -356,8 +413,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let data = serde_json::to_string_pretty(&out.envelope)
                 .map_err(|e| format!("Failed to serialize envelope: {}", e))?;
-            fs::write(proof_out, data)
-                .map_err(|e| format!("Failed to write proof file: {}", e))?;
+            fs::write(proof_out, data).map_err(|e| format!("Failed to write proof file: {}", e))?;
             println!("Proof written to: {}", proof_out);
 
             if let Some(path) = public_inputs_out {
@@ -380,7 +436,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for (index, p) in programs.iter().enumerate() {
                 let content = fs::read_to_string(p)
                     .map_err(|e| format!("Failed to read file {}: {}", p, e))?;
-                
+
                 #[cfg(feature = "experimental")]
                 let profile = bud_isa::IsaProfile::Experimental;
                 #[cfg(not(feature = "experimental"))]
@@ -402,8 +458,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     commit_state: true,
                 })?;
 
-                out.state.save_atomic()
-                    .map_err(|e| format!("Failed to save state at batch step {}: {}", index + 1, e))?;
+                out.state.save_atomic().map_err(|e| {
+                    format!("Failed to save state at batch step {}: {}", index + 1, e)
+                })?;
 
                 println!(
                     "Step {} [{}]: Executed, proved, verified, and state committed successfully. Post-state Root: {:?}",
@@ -414,8 +471,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Deploy { program, output } => {
-            let content = fs::read_to_string(program)
-                .map_err(|e| format!("Failed to read file: {}", e))?;
+            let content =
+                fs::read_to_string(program).map_err(|e| format!("Failed to read file: {}", e))?;
             #[cfg(feature = "experimental")]
             let profile = bud_isa::IsaProfile::Experimental;
             #[cfg(not(feature = "experimental"))]
@@ -441,8 +498,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             nonce,
             args,
         } => {
-            let bytes = fs::read(bytecode)
-                .map_err(|e| format!("Failed to read bytecode: {}", e))?;
+            let bytes =
+                fs::read(bytecode).map_err(|e| format!("Failed to read bytecode: {}", e))?;
             if bytes.len() % 8 != 0 {
                 return Err("Invalid bytecode: file size must be a multiple of 8 bytes".into());
             }
@@ -485,8 +542,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let expected_inputs: ExecutionPublicInputs = serde_json::from_str(&pi_data)
                 .map_err(|e| format!("Failed to parse public inputs: {}", e))?;
 
-            let bytes = fs::read(bytecode_file)
-                .map_err(|e| format!("Failed to read bytecode: {}", e))?;
+            let bytes =
+                fs::read(bytecode_file).map_err(|e| format!("Failed to read bytecode: {}", e))?;
             if bytes.len() % 8 != 0 {
                 return Err("Invalid bytecode: file size must be a multiple of 8 bytes".into());
             }
