@@ -40,23 +40,21 @@ pub fn hash_account(acc: &Account) -> Hash {
     res
 }
 
-static mut EMPTY_HASHES: [[u8; 32]; 65] = [[0u8; 32]; 65];
-static INIT_EMPTY: std::sync::Once = std::sync::Once::new();
+use std::sync::LazyLock;
+
+static EMPTY_HASHES: LazyLock<[[u8; 32]; 65]> = LazyLock::new(|| {
+    let mut hashes = [[0u8; 32]; 65];
+    for i in 1..=64 {
+        let mut hasher = Keccak::v256();
+        hasher.update(&hashes[i - 1]);
+        hasher.update(&hashes[i - 1]);
+        hasher.finalize(&mut hashes[i]);
+    }
+    hashes
+});
 
 pub fn get_empty_hash(depth: usize) -> Hash {
-    unsafe {
-        INIT_EMPTY.call_once(|| {
-            let mut hashes = [[0u8; 32]; 65];
-            for i in 1..=64 {
-                let mut hasher = Keccak::v256();
-                hasher.update(&hashes[i - 1]);
-                hasher.update(&hashes[i - 1]);
-                hasher.finalize(&mut hashes[i]);
-            }
-            EMPTY_HASHES = hashes;
-        });
-        EMPTY_HASHES[depth]
-    }
+    EMPTY_HASHES[depth]
 }
 
 fn compute_subtree_root(leaves: &[(u64, Hash)], depth: usize, prefix: u64) -> Hash {

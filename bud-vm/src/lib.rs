@@ -618,7 +618,7 @@ pub fn poseidon4_hash(a: u64, b: u64) -> u64 {
     for round_rc in RC.iter() {
         // Add round constants
         for i in 0..8 {
-            s[i] = s[i].wrapping_add(round_rc[i]) % P;
+            s[i] = ((s[i] as u128 + round_rc[i] as u128) % P as u128) as u64;
         }
         // S-box: x^7 via x2=x^2, x4=x2^2, x7=x4*x2*x mod P
         let mut sbox: [u64; 8] = [0; 8];

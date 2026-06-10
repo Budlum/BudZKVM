@@ -78,11 +78,12 @@ Bu açığı kapatmak için şu mimariyi entegre ettik:
 1. **CPU Aktiflik Ayrımı (`COL_CPU_ACTIVE`):** Trace matrisine sadece programın gerçek adımlarında `1`, dolgu (padding) adımlarında `0` değerini alan bir aktiflik sütunu eklendi.
 2. **Preprocessed Active Kolonu:** Program bytecode'unun lookup doğrulaması (Program CTL) yapılırken, sadece `COL_CPU_ACTIVE = 1` olan satırlar LogUp kümesine dahil edildi:
    ```rust
-   // Program lookup terimi sadece CPU aktifken veriyoluna eklenir
-   let is_active = cur[COL_CPU_ACTIVE].clone();
-   let term = alpha + program_hash + bytecode_pc + bytecode_inst;
-   s_prog_next = s_prog + is_active * inv(term);
+   // Preprocessed aktiflik kolonu ve memory lookup
+   let term = alpha + memory_addr + memory_val;
+   s_mem_next = s_mem + is_active * inv(term);
    ```
+
+
 3. **Derece (Degree) Hizalaması:** Prover ve verifier'ın padding kararlarını aynı cömertlikle hesaplaması için trace derecesi formülü senkronize edildi:
    $$\text{degree} = (3 \cdot n_{\text{cpu}} + 1).\text{next\_power\_of\_two}().\text{max}(16)$$
 

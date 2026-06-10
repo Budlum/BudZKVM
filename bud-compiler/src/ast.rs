@@ -16,6 +16,7 @@ pub struct StorageField {
 pub struct Function {
     pub name: String,
     pub params: Vec<Param>,
+    pub return_type: Option<String>,
     pub body: Vec<Stmt>,
     pub is_pub: bool,
 }
@@ -58,6 +59,8 @@ pub enum Expr {
     Ident(String),
     StorageRead(String),
     MappingRead(String, Box<Expr>),
+    FieldAccess(Box<Expr>, String),
+    StructLiteral(String, Vec<(String, Expr)>),
     Binary(Box<Expr>, BinOp, Box<Expr>),
     Call(String, Vec<Expr>),
 }

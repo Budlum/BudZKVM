@@ -188,6 +188,16 @@ impl<'a> Parser<'a> {
         }
         self.expect(Token::ParenClose)?;
 
+        let mut return_type = None;
+        if self.peek() == &Token::Arrow {
+            self.consume();
+            if let Token::Ident(ty) = self.consume() {
+                return_type = Some(ty);
+            } else {
+                return Err(CompileError::ParserError("Expected return type".to_string()));
+            }
+        }
+
         self.expect(Token::BraceOpen)?;
         let mut body = Vec::new();
         while self.peek() != &Token::BraceClose {
@@ -198,6 +208,7 @@ impl<'a> Parser<'a> {
         Ok(Function {
             name,
             params,
+            return_type,
             body,
             is_pub,
         })
@@ -399,8 +410,22 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
+    fn parse_postfix(&mut self) -> Result<Expr, CompileError> {
+        let mut expr = self.parse_primary()?;
+        while self.peek() == &Token::Dot {
+            self.consume();
+            let field = if let Token::Ident(f) = self.consume() {
+                f
+            } else {
+                return Err(CompileError::ParserError("Expected field name after dot".to_string()));
+            };
+            expr = Expr::FieldAccess(Box::new(expr), field);
+        }
+        Ok(expr)
+    }
+
     fn parse_term(&mut self) -> Result<Expr, CompileError> {
-        let mut left = self.parse_primary()?;
+        let mut left = self.parse_postfix()?;
 
         while matches!(self.peek(), Token::Star | Token::Slash) {
             let op = match self.consume() {
@@ -408,7 +433,7 @@ impl<'a> Parser<'a> {
                 Token::Slash => BinOp::Div,
                 _ => unreachable!(),
             };
-            let right = self.parse_primary()?;
+            let right = self.parse_postfix()?;
             left = Expr::Binary(Box::new(left), op, Box::new(right));
         }
 
@@ -476,11 +501,40 @@ impl<'a> Parser<'a> {
                         "verify_merkle_proof".to_string(),
                         vec![root, leaf, path],
                     ))
+                } else if self.peek() == &Token::ParenOpen {
+                    self.consume();
+                    let mut args = Vec::new();
+                    while self.peek() != &Token::ParenClose {
+                        args.push(self.parse_expr()?);
+                        if self.peek() == &Token::Comma {
+                            self.consume();
+                        }
+                    }
+                    self.expect(Token::ParenClose)?;
+                    Ok(Expr::Call(name, args))
                 } else if self.peek() == &Token::BracketOpen {
                     self.consume();
                     let key = self.parse_expr()?;
                     self.expect(Token::BracketClose)?;
                     Ok(Expr::MappingRead(name, Box::new(key)))
+                } else if self.peek() == &Token::BraceOpen {
+                    self.consume();
+                    let mut fields = Vec::new();
+                    while self.peek() != &Token::BraceClose {
+                        let fname = if let Token::Ident(f) = self.consume() {
+                            f
+                        } else {
+                            return Err(CompileError::ParserError("Expected struct field name".to_string()));
+                        };
+                        self.expect(Token::Colon)?;
+                        let val = self.parse_expr()?;
+                        fields.push((fname, val));
+                        if self.peek() == &Token::Comma {
+                            self.consume();
+                        }
+                    }
+                    self.expect(Token::BraceClose)?;
+                    Ok(Expr::StructLiteral(name, fields))
                 } else {
                     Ok(Expr::Ident(name))
                 }

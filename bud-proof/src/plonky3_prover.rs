@@ -449,7 +449,7 @@ fn trace_matrix(trace: &[Step], _program: &[u64]) -> (RowMajorMatrix<Goldilocks>
                 // S-box
                 let mut sbox: [u64; 8] = [0; 8];
                 for i in 0..8 {
-                    let s_rc = (s[i].wrapping_add(rc[r][i])) % P;
+                    let s_rc = ((s[i] as u128 + rc[r][i] as u128) % P as u128) as u64;
                     let x2 = ((s_rc as u128 * s_rc as u128) % P as u128) as u64;
                     let x4 = ((x2 as u128 * x2 as u128) % P as u128) as u64;
                     values[row_start + COL_POSEIDON_X2_BASE + r * 8 + i] = Goldilocks::new(x2);

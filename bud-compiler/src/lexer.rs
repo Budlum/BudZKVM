@@ -57,6 +57,8 @@ pub enum Token {
     FatArrow,
     #[token("..")]
     DotDot,
+    #[token(".")]
+    Dot,
 
     #[token("+")]
     Plus,

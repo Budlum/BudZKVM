@@ -99,7 +99,10 @@ VM Trace (Vec<Step>)
 ### ✅ Phase 3: BudL Compiler (complete)
 - [x] Lexer (logos), recursive-descent parser, sema, codegen
 - [x] while/for loops, operator precedence, comments
-- [ ] Struct/record support, standard library, better error spans
+- [x] User-defined function calls (Call/Ret, caller-saved registers)
+- [x] Static Type System (Semantic Analyzer, u64/bool/field, return types)
+- [x] Struct support and Dynamic Heap Memory (r31 HEAP_PTR)
+- [ ] Pattern matching (`match` expressions) and better error spans
 
 ### ✅ Phase 4: Plonky3 0.5.2 Prover (complete)
 - [x] StarkGenericConfig, PCS, challenger wiring
@@ -142,13 +145,13 @@ VM Trace (Vec<Step>)
 - [x] 10-chapter Turkish book + 3 developer guides
 - [ ] Diagrams, opcode-to-constraint walkthrough, debugging guides
 
-## Near-Term Plan (Faz 1)
+## Near-Term Plan (Faz 2 - Compiler Olgunlaştırma)
 
-1. Benchmark suite (criterion) — proving/verification time, proof size
-2. Prover parallelism optimization (Rayon)
-3. Poseidon multi-round full AIR verification
-4. BudL struct/mapping support, standard library
-5. L1-facing node APIs (bud-node)
+1. **Error Spans**: Adding line/column numbers to compile errors.
+2. **Match Expressions**: Adding pattern matching.
+3. **Witness Variables**: Private ZK inputs support.
+4. Benchmark suite (criterion) — proving/verification time, proof size.
+5. Prover parallelism optimization (Rayon).
 
 ## Verification Status
 
