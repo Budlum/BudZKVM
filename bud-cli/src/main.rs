@@ -504,10 +504,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("Invalid bytecode: file size must be a multiple of 8 bytes".into());
             }
             let mut prog = Vec::new();
-            for chunk in bytes.chunks_exact(8) {
-                let mut b = [0u8; 8];
-                b.copy_from_slice(chunk);
-                prog.push(u64::from_le_bytes(b));
+            for chunk in bytes.as_chunks::<8>().0 {
+                prog.push(u64::from_le_bytes(*chunk));
             }
 
             let out = run_pipeline(ExecutionConfig {
@@ -548,10 +546,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("Invalid bytecode: file size must be a multiple of 8 bytes".into());
             }
             let mut program = Vec::new();
-            for chunk in bytes.chunks_exact(8) {
-                let mut b = [0u8; 8];
-                b.copy_from_slice(chunk);
-                program.push(u64::from_le_bytes(b));
+            for chunk in bytes.as_chunks::<8>().0 {
+                program.push(u64::from_le_bytes(*chunk));
             }
 
             match Prover::verify(&envelope, &expected_inputs, &program) {
