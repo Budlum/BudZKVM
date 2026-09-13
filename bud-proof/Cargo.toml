@@ -2,6 +2,7 @@
 name = "bud-proof"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 bud-vm = { path = "../bud-vm" }

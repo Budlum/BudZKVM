@@ -818,18 +818,18 @@ fn to_public_values(pi: &ExecutionPublicInputs) -> Vec<Goldilocks> {
     vals.push(Goldilocks::from_u64(pi.chain_id & 0xFFFF_FFFF));
     vals.push(Goldilocks::from_u64(pi.chain_id >> 32));
 
-    for chunk in pi.program_hash.chunks_exact(4) {
-        let val = u32::from_le_bytes(chunk.try_into().unwrap());
+    for chunk in pi.program_hash.as_chunks::<4>().0 {
+        let val = u32::from_le_bytes(*chunk);
         vals.push(Goldilocks::from_u64(val as u64));
     }
 
-    for chunk in pi.initial_state_root.chunks_exact(4) {
-        let val = u32::from_le_bytes(chunk.try_into().unwrap());
+    for chunk in pi.initial_state_root.as_chunks::<4>().0 {
+        let val = u32::from_le_bytes(*chunk);
         vals.push(Goldilocks::from_u64(val as u64));
     }
 
-    for chunk in pi.final_state_root.chunks_exact(4) {
-        let val = u32::from_le_bytes(chunk.try_into().unwrap());
+    for chunk in pi.final_state_root.as_chunks::<4>().0 {
+        let val = u32::from_le_bytes(*chunk);
         vals.push(Goldilocks::from_u64(val as u64));
     }
 
@@ -854,8 +854,8 @@ fn to_public_values(pi: &ExecutionPublicInputs) -> Vec<Goldilocks> {
     vals.push(Goldilocks::from_u64(pi.trace_len & 0xFFFF_FFFF));
     vals.push(Goldilocks::from_u64(pi.trace_len >> 32));
 
-    for chunk in pi.event_digest.chunks_exact(4) {
-        let val = u32::from_le_bytes(chunk.try_into().unwrap());
+    for chunk in pi.event_digest.as_chunks::<4>().0 {
+        let val = u32::from_le_bytes(*chunk);
         vals.push(Goldilocks::from_u64(val as u64));
     }
 
