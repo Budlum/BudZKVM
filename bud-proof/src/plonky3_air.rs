@@ -924,20 +924,44 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
 
             const RC: [[u64; 8]; 4] = [
                 [
-                    0xdd5743e7f2a5a5d9, 0xcb3a864e58ada44b, 0xffa2449ed32f8cdc, 0x42025f65d6bd13ee,
-                    0x7889175e25506323, 0x34b98bb03d24b737, 0xbdcc535ecc4faa2a, 0x5b20ad869fc0d033,
+                    0xdd5743e7f2a5a5d9,
+                    0xcb3a864e58ada44b,
+                    0xffa2449ed32f8cdc,
+                    0x42025f65d6bd13ee,
+                    0x7889175e25506323,
+                    0x34b98bb03d24b737,
+                    0xbdcc535ecc4faa2a,
+                    0x5b20ad869fc0d033,
                 ],
                 [
-                    0xf1dda5b9259dfcb4, 0x27515210be112d59, 0x4227d1718c766c3f, 0x26d333161a5bd794,
-                    0x49b938957bf4b026, 0x4a56b5938b213669, 0x1120426b48c8353d, 0x6b323c3f10a56cad,
+                    0xf1dda5b9259dfcb4,
+                    0x27515210be112d59,
+                    0x4227d1718c766c3f,
+                    0x26d333161a5bd794,
+                    0x49b938957bf4b026,
+                    0x4a56b5938b213669,
+                    0x1120426b48c8353d,
+                    0x6b323c3f10a56cad,
                 ],
                 [
-                    0xce57d6245ddca6b2, 0xb1fc8d402bba1eb1, 0xb5c5096ca959bd04, 0x6db55cd306d31f7f,
-                    0xc49d293a81cb9641, 0x1ce55a4fe979719f, 0xa92e60a9d178a4d1, 0x002cc64973bcfd8c,
+                    0xce57d6245ddca6b2,
+                    0xb1fc8d402bba1eb1,
+                    0xb5c5096ca959bd04,
+                    0x6db55cd306d31f7f,
+                    0xc49d293a81cb9641,
+                    0x1ce55a4fe979719f,
+                    0xa92e60a9d178a4d1,
+                    0x002cc64973bcfd8c,
                 ],
                 [
-                    0xcea721cce82fb11b, 0xe5b55eb8098ece81, 0x4e30525c6f1ddd66, 0x43c6702827070987,
-                    0xaca68430a7b5762a, 0x3674238634df9c93, 0x88cee1c825e33433, 0xde99ae8d74b57176,
+                    0xcea721cce82fb11b,
+                    0xe5b55eb8098ece81,
+                    0x4e30525c6f1ddd66,
+                    0x43c6702827070987,
+                    0xaca68430a7b5762a,
+                    0x3674238634df9c93,
+                    0x88cee1c825e33433,
+                    0xde99ae8d74b57176,
                 ],
             ];
 
@@ -977,9 +1001,7 @@ impl<AB: PermutationAirBuilder> Air<AB> for BudAir {
                     for j in 0..8 {
                         sum += sbox_out[j].clone() * AB::Expr::from(AB::F::from_u64(MDS[0][j]));
                     }
-                    builder
-                        .when(p.clone())
-                        .assert_eq(rd_val_new.clone(), sum);
+                    builder.when(p.clone()).assert_eq(rd_val_new.clone(), sum);
                 }
             }
         }

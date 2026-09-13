@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod codegen;
+pub mod ir;
 pub mod lexer;
 pub mod parser;
 pub mod sema;
@@ -168,11 +169,12 @@ mod tests {
                 }
             }
         "#;
-        
-        let bytecode = compile(source, IsaProfile::Production).expect("Should compile large literals");
+
+        let bytecode =
+            compile(source, IsaProfile::Production).expect("Should compile large literals");
         let mut vm = bud_vm::Vm::new(8192);
         vm.run(&bytecode).expect("VM should run");
-        
+
         assert_eq!(vm.events.len(), 2);
         assert_eq!(vm.events[0], u64::MAX);
         assert_eq!(vm.events[1], 1152921504606846975);
@@ -188,8 +190,9 @@ mod tests {
             source.push_str(" + 1");
         }
         source.push_str("; emit Result(x); } }");
-        
-        let bytecode = compile(&source, IsaProfile::Production).expect("Should reclaim registers and not exhaust them");
+
+        let bytecode = compile(&source, IsaProfile::Production)
+            .expect("Should reclaim registers and not exhaust them");
         let mut vm = bud_vm::Vm::new(8192);
         vm.run(&bytecode).expect("VM should run");
         assert_eq!(vm.events, vec![51]);
@@ -216,10 +219,11 @@ mod tests {
             }
         "#;
 
-        let bytecode = compile(source, IsaProfile::Production).expect("Should compile function calls");
+        let bytecode =
+            compile(source, IsaProfile::Production).expect("Should compile function calls");
         let mut vm = bud_vm::Vm::new(8192);
         vm.run(&bytecode).expect("VM should run");
-        
+
         // (1 + 2) * 42 = 126
         assert_eq!(vm.events, vec![126]);
     }
@@ -248,7 +252,7 @@ mod tests {
         let bytecode = compile(source, IsaProfile::Production).expect("Should compile structs");
         let mut vm = bud_vm::Vm::new(8192);
         vm.run(&bytecode).expect("VM should run");
-        
+
         // p.y (20) + p.x (10) = 30
         assert_eq!(vm.events, vec![30]);
     }
