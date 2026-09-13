@@ -65,9 +65,14 @@ impl Codegen {
 
         // Patch main call
         if let Some(main_idx) = func_offsets.get("main") {
-            self.patch_jump(jump_to_main_idx, (*main_idx as i32) - (jump_to_main_idx as i32));
+            self.patch_jump(
+                jump_to_main_idx,
+                (*main_idx as i32) - (jump_to_main_idx as i32),
+            );
         } else {
-            self.error = Some(CompileError::CodegenError("main function not found".to_string()));
+            self.error = Some(CompileError::CodegenError(
+                "main function not found".to_string(),
+            ));
         }
 
         let unpatched = std::mem::take(&mut self.unpatched_calls);
@@ -75,7 +80,10 @@ impl Codegen {
             if let Some(target_idx) = func_offsets.get(&func_name) {
                 self.patch_jump(call_idx, (*target_idx as i32) - (call_idx as i32));
             } else {
-                self.error = Some(CompileError::CodegenError(format!("Undefined function {}", func_name)));
+                self.error = Some(CompileError::CodegenError(format!(
+                    "Undefined function {}",
+                    func_name
+                )));
             }
         }
 
@@ -93,7 +101,7 @@ impl Codegen {
 
         self.next_reg = 1;
         let mut scope = std::collections::HashMap::new();
-        
+
         let ret_addr_reg = self.alloc_reg();
         self.emit(Opcode::Pop, ret_addr_reg, 0, 0, 0);
 
@@ -290,7 +298,7 @@ impl Codegen {
                 inner_scope.insert(var.clone(), loop_reg);
 
                 let start_idx = self.instructions.len();
-                
+
                 let inner_saved = self.next_reg;
                 let cond_reg = self.alloc_reg();
                 self.emit(Opcode::Lt, cond_reg, loop_reg, end_reg, 0);
@@ -327,13 +335,13 @@ impl Codegen {
                     (body_start_idx as i32) - (jump_to_body_idx as i32),
                 );
                 self.patch_jump(jump_to_end_idx, (end_idx as i32) - (jump_to_end_idx as i32));
-                
+
                 self.next_reg = saved_reg;
             }
             Stmt::Return(expr) => {
                 let temp = self.alloc_reg();
                 self.emit(Opcode::Pop, temp, 0, 0, 0);
-                
+
                 if let Some(e) = expr {
                     let reg = self.generate_expr(e, scope, storage);
                     self.emit(Opcode::Push, 0, reg, 0, 0);
@@ -342,7 +350,7 @@ impl Codegen {
                     self.emit(Opcode::Load, zero, 0, 0, 0);
                     self.emit(Opcode::Push, 0, zero, 0, 0);
                 }
-                
+
                 self.emit(Opcode::Push, 0, temp, 0, 0);
                 self.emit(Opcode::Ret, 0, 0, 0, 0);
                 self.next_reg = saved_reg;
@@ -408,19 +416,19 @@ impl Codegen {
                     let shift_reg = self.alloc_reg();
                     self.emit(Opcode::Load, shift_reg, 0, 0, 1073741824); // 2^30
                     let temp_reg = self.alloc_reg();
-                    
+
                     let mut started = false;
-                    for i in 0..3 {
-                        if chunks[i] > 0 || started {
+                    for &chunk in &chunks {
+                        if chunk > 0 || started {
                             if started {
                                 self.emit(Opcode::Mul, reg, reg, shift_reg, 0);
-                                if chunks[i] > 0 {
-                                    self.emit(Opcode::Load, temp_reg, 0, 0, chunks[i]);
+                                if chunk > 0 {
+                                    self.emit(Opcode::Load, temp_reg, 0, 0, chunk);
                                     self.emit(Opcode::Add, reg, reg, temp_reg, 0);
                                 }
                             } else {
                                 started = true;
-                                self.emit(Opcode::Load, reg, 0, 0, chunks[i]);
+                                self.emit(Opcode::Load, reg, 0, 0, chunk);
                             }
                         }
                     }
@@ -485,21 +493,21 @@ impl Codegen {
                 let saved_next_reg = self.next_reg;
                 let ptr_reg = self.alloc_reg();
                 self.emit(Opcode::Add, ptr_reg, 31, 0, 0); // copy heap ptr to ptr_reg
-                
+
                 let mut field_vals = Vec::new();
                 for (_, val) in fields {
                     field_vals.push(self.generate_expr(val, scope, storage));
                 }
-                
+
                 for (i, val_reg) in field_vals.into_iter().enumerate() {
                     self.emit(Opcode::Store, 0, ptr_reg, val_reg, (i * 8) as i32);
                 }
-                
+
                 let size_reg = self.alloc_reg();
                 self.emit(Opcode::Load, size_reg, 0, 0, (fields.len() * 8) as i32);
                 self.emit(Opcode::Add, 31, 31, size_reg, 0); // bump heap pointer
-                
-                self.next_reg = saved_next_reg; 
+
+                self.next_reg = saved_next_reg;
                 let res_reg = self.alloc_reg();
                 self.emit(Opcode::Add, res_reg, ptr_reg, 0, 0); // return pointer
                 res_reg
@@ -507,7 +515,7 @@ impl Codegen {
             Expr::FieldAccess(base, field) => {
                 let base_reg = self.generate_expr(base, scope, storage);
                 let res_reg = self.alloc_reg();
-                
+
                 let mut offset = 0;
                 for fields in self.struct_layouts.values() {
                     if let Some(idx) = fields.iter().position(|f| f == field) {
@@ -523,7 +531,7 @@ impl Codegen {
                 let l_reg = self.generate_expr(left, scope, storage);
                 let saved2 = self.next_reg;
                 let r_reg = self.generate_expr(right, scope, storage);
-                
+
                 let res_reg = if l_reg >= saved1 {
                     l_reg
                 } else if r_reg >= saved2 {
@@ -555,7 +563,7 @@ impl Codegen {
                     let r1 = self.generate_expr(&args[0], scope, storage);
                     let saved2 = self.next_reg;
                     let r2 = self.generate_expr(&args[1], scope, storage);
-                    
+
                     let res = if r1 >= saved1 {
                         r1
                     } else if r2 >= saved2 {
@@ -563,7 +571,7 @@ impl Codegen {
                     } else {
                         self.alloc_reg()
                     };
-                    
+
                     self.emit(Opcode::Poseidon, res, r1, r2, 0);
                     self.next_reg = std::cmp::max(res + 1, saved1);
                     res
@@ -591,7 +599,7 @@ impl Codegen {
                     for r in 1..saved_next_reg {
                         self.emit(Opcode::Push, 0, r, 0, 0);
                     }
-                    
+
                     let mut arg_regs = Vec::new();
                     for arg in args {
                         arg_regs.push(self.generate_expr(arg, scope, storage));
@@ -599,19 +607,19 @@ impl Codegen {
                     for arg_reg in arg_regs {
                         self.emit(Opcode::Push, 0, arg_reg, 0, 0);
                     }
-                    
+
                     let call_idx = self.instructions.len();
                     self.emit(Opcode::Call, 0, 0, 0, 0);
                     self.unpatched_calls.push((call_idx, name.clone()));
-                    
+
                     self.next_reg = saved_next_reg;
                     let res_reg = self.alloc_reg();
                     self.emit(Opcode::Pop, res_reg, 0, 0, 0);
-                    
+
                     for r in (1..saved_next_reg).rev() {
                         self.emit(Opcode::Pop, r, 0, 0, 0);
                     }
-                    
+
                     res_reg
                 }
             }

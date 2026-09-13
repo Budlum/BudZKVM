@@ -51,7 +51,7 @@ impl SemanticAnalyzer {
         for s in &contract.structs {
             let mut fields = HashMap::new();
             for f in &s.fields {
-                let ty = Type::from_str(&f.ty).map_err(|e| CompileError::SemanticError(e))?;
+                let ty = Type::from_str(&f.ty).map_err(CompileError::SemanticError)?;
                 fields.insert(f.name.clone(), ty);
             }
             self.structs.insert(s.name.clone(), fields);
@@ -73,11 +73,20 @@ impl SemanticAnalyzer {
         }
 
         // 3. Builtins
-        self.functions.insert("poseidon".to_string(), (vec![Type::U64, Type::U64], Type::U64));
-        self.functions.insert("verify_merkle_proof".to_string(), (vec![Type::U64, Type::U64, Type::U64], Type::U64));
-        self.functions.insert("msg::sender".to_string(), (vec![], Type::U64));
-        self.functions.insert("msg::nonce".to_string(), (vec![], Type::U64));
-        self.functions.insert("block::number".to_string(), (vec![], Type::U64));
+        self.functions.insert(
+            "poseidon".to_string(),
+            (vec![Type::U64, Type::U64], Type::U64),
+        );
+        self.functions.insert(
+            "verify_merkle_proof".to_string(),
+            (vec![Type::U64, Type::U64, Type::U64], Type::U64),
+        );
+        self.functions
+            .insert("msg::sender".to_string(), (vec![], Type::U64));
+        self.functions
+            .insert("msg::nonce".to_string(), (vec![], Type::U64));
+        self.functions
+            .insert("block::number".to_string(), (vec![], Type::U64));
 
         for func in &contract.functions {
             self.analyze_function(func, &mut errors);
@@ -126,11 +135,15 @@ impl SemanticAnalyzer {
                     let ty = self.analyze_expr(expr, env, errors);
                     if ty != expected_ty && ty != Type::Unknown && expected_ty != Type::Unknown {
                         errors.push(CompileError::SemanticError(format!(
-                            "Type mismatch in assign: expected {:?}, got {:?}", expected_ty, ty
+                            "Type mismatch in assign: expected {:?}, got {:?}",
+                            expected_ty, ty
                         )));
                     }
                 } else {
-                    errors.push(CompileError::SemanticError(format!("Undefined variable: {}", name)));
+                    errors.push(CompileError::SemanticError(format!(
+                        "Undefined variable: {}",
+                        name
+                    )));
                     self.analyze_expr(expr, env, errors);
                 }
             }
@@ -158,7 +171,12 @@ impl SemanticAnalyzer {
                     self.analyze_stmt(s, env, errors);
                 }
             }
-            Stmt::For { var, start, end, body } => {
+            Stmt::For {
+                var,
+                start,
+                end,
+                body,
+            } => {
                 self.analyze_expr(start, env, errors);
                 self.analyze_expr(end, env, errors);
                 let mut inner_env = env.clone();
@@ -173,9 +191,13 @@ impl SemanticAnalyzer {
                 } else {
                     Type::Void
                 };
-                if ret_ty != self.current_func_ret && ret_ty != Type::Unknown && self.current_func_ret != Type::Unknown {
+                if ret_ty != self.current_func_ret
+                    && ret_ty != Type::Unknown
+                    && self.current_func_ret != Type::Unknown
+                {
                     errors.push(CompileError::SemanticError(format!(
-                        "Type mismatch in return: expected {:?}, got {:?}", self.current_func_ret, ret_ty
+                        "Type mismatch in return: expected {:?}, got {:?}",
+                        self.current_func_ret, ret_ty
                     )));
                 }
             }
@@ -202,7 +224,10 @@ impl SemanticAnalyzer {
                 if let Some(ty) = env.get(name) {
                     ty.clone()
                 } else {
-                    errors.push(CompileError::SemanticError(format!("Undefined identifier: {}", name)));
+                    errors.push(CompileError::SemanticError(format!(
+                        "Undefined identifier: {}",
+                        name
+                    )));
                     Type::Unknown
                 }
             }
@@ -218,11 +243,16 @@ impl SemanticAnalyzer {
                         if let Some(fty) = fields.get(field) {
                             return fty.clone();
                         } else {
-                            errors.push(CompileError::SemanticError(format!("Struct {} has no field {}", sname, field)));
+                            errors.push(CompileError::SemanticError(format!(
+                                "Struct {} has no field {}",
+                                sname, field
+                            )));
                         }
                     }
                 } else if base_ty != Type::Unknown {
-                    errors.push(CompileError::SemanticError("Field access on non-struct".to_string()));
+                    errors.push(CompileError::SemanticError(
+                        "Field access on non-struct".to_string(),
+                    ));
                 }
                 Type::Unknown
             }
@@ -232,15 +262,24 @@ impl SemanticAnalyzer {
                         let ty = self.analyze_expr(val, env, errors);
                         if let Some(expected_ty) = sfields.get(fname) {
                             if ty != *expected_ty && ty != Type::Unknown {
-                                errors.push(CompileError::SemanticError(format!("Field {} type mismatch", fname)));
+                                errors.push(CompileError::SemanticError(format!(
+                                    "Field {} type mismatch",
+                                    fname
+                                )));
                             }
                         } else {
-                            errors.push(CompileError::SemanticError(format!("Unknown field {}", fname)));
+                            errors.push(CompileError::SemanticError(format!(
+                                "Unknown field {}",
+                                fname
+                            )));
                         }
                     }
                     Type::Struct(name.clone())
                 } else {
-                    errors.push(CompileError::SemanticError(format!("Undefined struct: {}", name)));
+                    errors.push(CompileError::SemanticError(format!(
+                        "Undefined struct: {}",
+                        name
+                    )));
                     Type::Unknown
                 }
             }
@@ -251,17 +290,28 @@ impl SemanticAnalyzer {
                 }
                 if let Some((params, ret_ty)) = self.functions.get(name) {
                     if params.len() != args.len() {
-                        errors.push(CompileError::SemanticError(format!("Function {} expects {} args, got {}", name, params.len(), args.len())));
+                        errors.push(CompileError::SemanticError(format!(
+                            "Function {} expects {} args, got {}",
+                            name,
+                            params.len(),
+                            args.len()
+                        )));
                     } else {
                         for (i, (exp, act)) in params.iter().zip(arg_types.iter()).enumerate() {
                             if exp != act && act != &Type::Unknown && exp != &Type::Unknown {
-                                errors.push(CompileError::SemanticError(format!("Arg {} type mismatch in {}", i, name)));
+                                errors.push(CompileError::SemanticError(format!(
+                                    "Arg {} type mismatch in {}",
+                                    i, name
+                                )));
                             }
                         }
                     }
                     ret_ty.clone()
                 } else {
-                    errors.push(CompileError::SemanticError(format!("Undefined function: {}", name)));
+                    errors.push(CompileError::SemanticError(format!(
+                        "Undefined function: {}",
+                        name
+                    )));
                     Type::Unknown
                 }
             }
@@ -269,7 +319,9 @@ impl SemanticAnalyzer {
                 let l_ty = self.analyze_expr(left, env, errors);
                 let r_ty = self.analyze_expr(right, env, errors);
                 if l_ty != r_ty && l_ty != Type::Unknown && r_ty != Type::Unknown {
-                    errors.push(CompileError::SemanticError("Type mismatch in binary expression".to_string()));
+                    errors.push(CompileError::SemanticError(
+                        "Type mismatch in binary expression".to_string(),
+                    ));
                 }
                 l_ty // All binary ops return same type (or u64 for comparisons, which is currently our only type)
             }
